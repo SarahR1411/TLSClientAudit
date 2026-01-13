@@ -26,7 +26,7 @@ Pour valider la sécurité, il faut obligatoirement piéger le client en ne lui 
 
 ## Utilisation
 
-### 1. Test en local (Simulation)
+### 1. Test en local
 
 Pour tester le code sur votre machine locale, utilisez le script `run_full_test.sh`.
 
@@ -36,7 +36,7 @@ chmod +x run_full_test.sh
 ```
 Ce script lance mitmdump en arrière-plan et utilise curl pour simuler un client qui se connecte trois fois de suite. C'est utile pour vérifier que la logique du code fonctionne.
 
-### 2. Sur la Raspberry Pi (Audit Réel)
+### 2. Sur la Raspberry Pi
 
 Le script d'automatisation de l'option 1 ne fonctionnera pas sur la Raspberry Pi car nous auditons de vrais appareils. On ne peut pas vraiment scripter un iPhone pour qu'il relance sa connexion automatiquement.
 
