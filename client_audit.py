@@ -1,4 +1,4 @@
-from mitmproxy import tls, ctx
+from mitmproxy import tls, ctx, http
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, dsa, ed25519, ed448
 
 # for changing the colors in the terminal
@@ -18,12 +18,29 @@ class ClientAuditor:
     def __init__(self):
         # tracks the audit step and the score at each step for each client IP, ex: {'127.0.0.1': {'step': 1, 'base_score': 'A', 'failed_attack': False} }
         self.client_state = {}
+    
+    def request(self, flow : http.HTTPFlow):
+        """
+        Listens for HTTP requests.
+        Used to detect when a user visits mitm.it to install mitmproxy's CA.
+        """
+
+        if "mitm.it" in flow.request.pretty_host:
+            client_ip = flow.client_conn.address[0]
+            print(f"{BLUE}[*] SETUP DETECTED: {client_ip} is downloading the Certificate at mitm.it{RESET}")
 
     def load(self, loader):
         # makes sure we start with 'clean' default settings
         ctx.options.ciphers_server = None
         ctx.options.tls_version_client_min = "TLS1"
         ctx.options.tls_version_client_max = "TLS1_3"
+
+        print("\n" + "="*50)
+        print(f"{BOLD}   CLIENT AUDITOR LOADED{RESET}")
+        print(f"   1. Connect device to WiFi")
+        print(f"   2. Go to {BOLD}http://mitm.it{RESET} to install CA")
+        print(f"   3. Open target app to start audit")
+        print("="*50 + "\n")
 
     def tls_clienthello(self, data: tls.ClientHelloData):
         """
@@ -39,6 +56,9 @@ class ClientAuditor:
         """
         client_ip = data.context.client.peername[0]
         server_name = data.client_hello.sni or "unknown_target"
+
+        if "mitm.it" in server_name:
+            return
 
         client_key = (client_ip, server_name) # creates a unique key for a specific connection
         
