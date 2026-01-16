@@ -30,7 +30,7 @@ class ClientAuditor:
         Triggered when the client sends the initial hello packet, before the hanshake is finished 
         so we can intervene with an attack.
 
-        - First it identifies the client by its IP
+        - First it identifies the client by its IP and the destination website
         - Then it checks which step the client is currently on
         - Finally, it modifies the 'ctx.options' to inject the specific attack for that step : 
             - step 1 : no changes (passive observation)
@@ -38,15 +38,18 @@ class ClientAuditor:
             - step 3 : forced weak encryption attack
         """
         client_ip = data.context.client.peername[0]
+        server_name = data.client_hello.sni or "unknown_target"
+
+        client_key = (client_ip, server_name) # creates a unique key for a specific connection
         
         # initializes new client
-        if client_ip not in self.client_state:
-            self.client_state[client_ip] = {'step': 1, 'base_score': 'A', 'failed_attack': False}
-            print(f"\n{BLUE}[*] NEW TARGET: {client_ip} - Starting Audit Sequence{RESET}")
+        if client_key not in self.client_state:
+            self.client_state[client_key] = {'step': 1, 'base_score': 'A', 'failed_attack': False}
+            print(f"\n{BLUE}[*] NEW TARGET CONNECTION: {client_ip} -> {server_name} - Starting Audit Sequence{RESET}")
 
-        step = self.client_state[client_ip]['step']
+        step = self.client_state[client_key]['step']
         print("-" * 50)
-        print(f"[#] CONNECTION #{step} from {client_ip}")
+        print(f"[#] CONNECTION #{step} from {client_ip} to {server_name}")
 
         
         if step == 1:
@@ -74,7 +77,12 @@ class ClientAuditor:
         - If we're in step 1 : We analyze the real server's certificate context.
         """
         client_ip = data.context.client.peername[0]
-        step = self.client_state[client_ip]['step']
+        server_name = data.conn.sni or "unknown_target"
+        client_key = (client_ip, server_name)
+
+        if client_key not in self.client_state: return # safety check if the key exists
+
+        step = self.client_state[client_key]['step']
 
         # only run this audit during step 1 (baseline)
         if step == 1:
@@ -90,27 +98,32 @@ class ClientAuditor:
         """
 
         client_ip = data.context.client.peername[0]
-        step = self.client_state[client_ip]['step']
+        server_name = data.conn.sni or "unknown_target"
+        client_key = (client_ip, server_name)
+        
+        if client_key not in self.client_state: return
 
-        print(f"[+] HANDSHAKE COMPLETED with {client_ip}")
+        step = self.client_state[client_key]['step']
+
+        print(f"[+] HANDSHAKE COMPLETED: {client_ip} -> {server_name}")
 
         if step == 1:
             score = self.analyze_connection_quality(data) # calculates 'C' but stores it for later
-            self.client_state[client_ip]['base_score'] = score
+            self.client_state[client_key]['base_score'] = score
             print(f"{GREEN}[V] Baseline data captured.{RESET}")
 
         elif step == 2:
             print(f"{RED}[!] FAIL: Client accepted TLS 1.0 Downgrade!{RESET}")
             print(f"    (Client did not enforce Minimum TLS Version)")
-            self.client_state[client_ip]['failed_attack'] = True
+            self.client_state[client_key]['failed_attack'] = True
 
         elif step == 3:
             print(f"{RED}[!] FAIL: Client accepted WEAK CIPHER (RC4)!{RESET}")
             print(f"    (Client did not enforce secure cipher suite)")
-            self.client_state[client_ip]['failed_attack'] = True
+            self.client_state[client_key]['failed_attack'] = True
 
         # prepare for next step
-        self.advance_step(client_ip)
+        self.advance_step(client_key)
 
     def tls_failed_client(self, data: tls.TlsData):
         """
@@ -120,7 +133,12 @@ class ClientAuditor:
         """
 
         client_ip = data.context.client.peername[0]
-        step = self.client_state[client_ip]['step']
+        server_name = data.conn.sni or "unknown_target"
+        client_key = (client_ip, server_name)
+
+        if client_key not in self.client_state: return
+
+        step = self.client_state[client_key]['step']
         
         error_msg = data.conn.error
         print(f"[-] HANDSHAKE FAILED (Reason: {error_msg})")
@@ -132,41 +150,43 @@ class ClientAuditor:
             print(f"{GREEN}[V] SUCCESS: Client blocked Weak Cipher attack.{RESET}")
 
         # prepare for next step
-        self.advance_step(client_ip)
+        self.advance_step(client_key)
 
-    def advance_step(self, client_ip):
+    def advance_step(self, client_key):
         """
         Increments the state machine. 
         It's called after every connection attempt (pass or fail) and does the following:
-            - Increases the step counter for the given IP
+            - Increases the step counter for the specific connection (IP + target)
             - Resets the global proxy settings ('ctx.options') back to default
             - If step 3 is finished, it calculates and prints the final report card
         """
         
-        current_step = self.client_state[client_ip]['step']
+        current_step = self.client_state[client_key]['step']
 
         if current_step == 3:
             # retrieves the saved score from step 1
-            base = self.client_state[client_ip]['base_score']
+            base = self.client_state[client_key]['base_score']
 
             # checks the flag from steps 2/3
-            failed = self.client_state[client_ip]['failed_attack']
+            failed = self.client_state[client_key]['failed_attack']
 
             # if the client failed an attack, it forces F. Otherwise, it uses the base score
             final_grade = "F" if failed else base
 
             color = GREEN if final_grade == "A" else (YELLOW if final_grade in ["B", "C"] else RED)
 
+            ip, name = client_key
+
             print("\n" + "="*45)
-            print(f"       FINAL SECURITY REPORT: {client_ip}")
+            print(f"       FINAL SECURITY REPORT FOR CONNECTION: {ip} -> {name}")
             print(f"       OVERALL GRADE: {color}{BOLD}{final_grade}{RESET}")
             print("="*45 + "\n")
             
             # cleanup
-            del self.client_state[client_ip]
+            del self.client_state[client_key]
         
         else:
-            self.client_state[client_ip]['step'] += 1
+            self.client_state[client_key]['step'] += 1
 
         # resets the global proxy settings back to default
         ctx.options.ciphers_server = None
