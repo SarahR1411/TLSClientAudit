@@ -133,9 +133,16 @@ class ClientAuditor:
             print(f"{GREEN}[V] Baseline data captured.{RESET}")
 
         elif step == 2:
-            print(f"{RED}[!] FAIL: Client accepted TLS 1.0 Downgrade!{RESET}")
-            print(f"    (Client did not enforce Minimum TLS Version)")
-            self.client_state[client_key]['failed_attack'] = True
+
+            version_used = data.conn.tls_version
+            print(f"    (Debug: Actual Version Negotiated: {version_used})")
+
+            if version_used in ["TLSv1.2", "TLSv1.3"]:
+                print(f"{YELLOW}[!] WARNING: Step 2 connection succeeded but used {version_used}. The Downgrade failed (Good for client?), but unexpected.{RESET}")
+            else: 
+                print(f"{RED}[!] FAIL: Client accepted TLS 1.0 Downgrade!{RESET}")
+                print(f"    (Client did not enforce Minimum TLS Version)")
+                self.client_state[client_key]['failed_attack'] = True
 
         elif step == 3:
 
