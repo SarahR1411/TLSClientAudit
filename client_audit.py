@@ -84,10 +84,10 @@ class ClientAuditor:
             ctx.options.tls_version_client_max = "TLS1" 
 
         elif step == 3:
-            print(f"{YELLOW}[MODE] Active Attack - Forcing RC4/Weak Ciphers{RESET}")
-            ctx.options.ciphers_server = "ALL:!aNULL:!eNULL:!LOW:!EXPORT:RC4-SHA"
+            print(f"{YELLOW}[MODE] Active Attack - Forcing Weak Ciphers (AES-CBC){RESET}")
+            ctx.options.ciphers_server = "AES128-SHA"
             # restore TLS version to allow the cipher test to run
-            ctx.options.tls_version_client_max = "TLS1_3"
+            ctx.options.tls_version_client_max = "TLS1_2"
 
     def tls_established_server(self, data: tls.TlsData):
         """
@@ -138,9 +138,17 @@ class ClientAuditor:
             self.client_state[client_key]['failed_attack'] = True
 
         elif step == 3:
-            print(f"{RED}[!] FAIL: Client accepted WEAK CIPHER (RC4)!{RESET}")
-            print(f"    (Client did not enforce secure cipher suite)")
-            self.client_state[client_key]['failed_attack'] = True
+
+            cipher_used = str(data.conn.cipher)
+            is_secure_aead = "GCM" in cipher_used or "POLY1305" in cipher_used
+
+            if not is_secure_aead:
+                print(f"{RED}[!] FAIL: Client accepted WEAK CIPHER ({cipher_used})!{RESET}")
+                print(f"    (Client did not enforce secure cipher suite)")
+                self.client_state[client_key]['failed_attack'] = True
+            else:
+                print(f"{GREEN}[V] OK: ATTACK FAILED - Connection succeeded with STRONG cipher ({cipher_used}){RESET}")
+                print(f"    (Client enforced secure cipher suite)")
 
         # prepare for next step
         self.advance_step(client_key)
