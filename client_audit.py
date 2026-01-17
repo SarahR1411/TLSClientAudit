@@ -1,5 +1,12 @@
 from mitmproxy import tls, ctx, http
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, dsa, ed25519, ed448
+import os 
+import datetime
+from cryptography import x509
+from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives import hashes, serialization
+
+
 
 # for changing the colors in the terminal
 RED = "\033[91m"
@@ -13,6 +20,8 @@ BOLD = "\033[1m"
 WEAK_CIPHER_KEYWORDS = ["_RC4_", "_MD5_", "_DES_", "_NULL_", "_EXPORT_", "_CBC_", "-SHA", "_SHA"] # to replace with db that updates automatically if possible 
 DEPRECATED_VERSIONS = ["SSLv2", "SSLv3", "TLSv1", "TLSv1.1"] 
 SCSV_CIPHER_CODE = 0x5600 
+
+BAD_CERT_FILE = "temp_bad_cert.pem"
 
 class ClientAuditor:
     def __init__(self):
@@ -34,6 +43,9 @@ class ClientAuditor:
         ctx.options.ciphers_server = None
         ctx.options.tls_version_client_min = "TLS1"
         ctx.options.tls_version_client_max = "TLS1_3"
+        ctx.options.certs = []
+
+        self.generate_bad_cert()
 
         print("\n" + "="*50)
         print(f"{BOLD}   CLIENT AUDITOR LOADED{RESET}")
@@ -88,6 +100,11 @@ class ClientAuditor:
             ctx.options.ciphers_server = "AES128-SHA"
             # restore TLS version to allow the cipher test to run
             ctx.options.tls_version_client_max = "TLS1_2"
+        elif step == 4:
+            print(f"{YELLOW}[MODE] Step 4: Serving Invalid/Expired Certificate{RESET}")
+            ctx.options.ciphers_server = None
+            ctx.options.tls_version_client_max = "TLS1_3"
+            ctx.options.certs = [f"*={BAD_CERT_FILE}"]
 
     def tls_established_server(self, data: tls.TlsData):
         """
@@ -156,6 +173,11 @@ class ClientAuditor:
             else:
                 print(f"{GREEN}[V] OK: ATTACK FAILED - Connection succeeded with STRONG cipher ({cipher_used}){RESET}")
                 print(f"    (Client enforced secure cipher suite)")
+        
+        elif step == 4:
+            print(f"{RED}[!] FAIL: Client accepted an EXPIRED/INVALID Certificate!{RESET}")
+            print(f"    (Client does not properly validate trust chain)")
+            self.client_state[client_key]['failed_attack'] = True
 
         # prepare for next step
         self.advance_step(client_key)
@@ -183,6 +205,9 @@ class ClientAuditor:
 
         elif step == 3:
             print(f"{GREEN}[V] SUCCESS: Client blocked Weak Cipher attack.{RESET}")
+        
+        elif step == 4:
+            print(f"{GREEN}[V] SUCCESS: Client blocked Invalid Certificate.{RESET}")
 
         # prepare for next step
         self.advance_step(client_key)
@@ -198,7 +223,7 @@ class ClientAuditor:
         
         current_step = self.client_state[client_key]['step']
 
-        if current_step == 3:
+        if current_step == 4:
             # retrieves the saved score from step 1
             base = self.client_state[client_key]['base_score']
 
@@ -226,6 +251,7 @@ class ClientAuditor:
         # resets the global proxy settings back to default
         ctx.options.ciphers_server = None
         ctx.options.tls_version_client_max = "TLS1_3"
+        ctx.options.certs = []
 
     def audit_passive(self, data):
         """
@@ -332,5 +358,29 @@ class ClientAuditor:
         if "RC4" in cipher_name or "MD5" in cipher_name: score = "F"
         
         return score
+    def generate_bad_cert(self):
+        """Generates a self-signed certificate that expired recently (2 days ago)"""
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, u"bad-cert.test")])
+        
+        cert = x509.CertificateBuilder().subject_name(subject).issuer_name(issuer).public_key(
+            key.public_key()
+        ).serial_number(x509.random_serial_number()).not_valid_before(
+            datetime.datetime.utcnow() - datetime.timedelta(days=92)
+        ).not_valid_after(
+            datetime.datetime.utcnow() - datetime.timedelta(days=2)
+        ).add_extension(
+            x509.BasicConstraints(ca=True, path_length=None), critical=True,
+        ).sign(key, hashes.SHA256())
+
+        with open(BAD_CERT_FILE, "wb") as f:
+            f.write(cert.public_bytes(serialization.Encoding.PEM))
+            f.write(key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption()
+            ))
+        print(f"{BLUE}[*] Generated temporary bad certificate: {BAD_CERT_FILE}{RESET}")
+
 
 addons = [ClientAuditor()]

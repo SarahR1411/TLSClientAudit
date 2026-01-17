@@ -25,6 +25,10 @@ echo ""
 echo ">>> Triggering connection 3 (Weak Cipher Attack)..."
 curl --proxy http://127.0.0.1:8080 https://www.google.com -k -s -o /dev/null
 
+echo ""
+echo ">>> Triggering connection 4 (Bad Certificate Test)..."
+curl --proxy http://127.0.0.1:8080 https://www.google.com -k -s -o /dev/null
+
 # cleanup (stops the tool)
 kill $MITM_PID
 wait $MITM_PID 2>/dev/null
