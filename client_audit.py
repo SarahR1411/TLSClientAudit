@@ -1,4 +1,5 @@
 from mitmproxy import tls, ctx
+from tlsaudit import analyze_tls
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, dsa, ed25519, ed448
 
 # for changing the colors in the terminal
@@ -72,9 +73,9 @@ class ClientAuditor:
             #"AES128-SHA:"
             #"AES256-SHA:"
             "CAMELLIA128-SHA:"
-            #"DES-CBC3-SHA"
+            "DES-CBC3-SHA"
             )
-        ctx.options.tls_version_client_max = "TLS1_2"
+        #ctx.options.tls_version_client_max = "TLS1_2"
 
 
     def tls_established_server(self, data: tls.TlsData):
@@ -104,6 +105,16 @@ class ClientAuditor:
         step = self.client_state[client_ip]['step']
 
         print(f"[+] HANDSHAKE COMPLETED with {client_ip}")
+        
+        analysis = analyze_tls(data.conn)
+
+        print("\n[TLSAudit]")
+        print(f" Version TLS : {analysis['version']}")
+        print(f" Cipher      : {analysis['cipher']}")
+        print(f" PFS         : {analysis['pfs']}")
+        print(f" AEAD        : {analysis['aead']}")
+        print(f" Résultat    : {analysis['grade']}")
+
 
         if step == 1:
             score = self.analyze_connection_quality(data) # calculates 'C' but stores it for later
@@ -123,10 +134,15 @@ class ClientAuditor:
         elif step == 4:
             print(f"{RED}[!] FAIL: Client accepted legacy RSA + CBC cipher suite!{RESET}")
             self.client_state[client_ip]['failed_attack'] = True
+            from rapport import generate_pdf
+            generate_pdf(analysis)
 
 
         # prepare for next step
         self.advance_step(client_ip)
+        
+
+
 
     def tls_failed_client(self, data: tls.TlsData):
         """
