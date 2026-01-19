@@ -5,6 +5,7 @@ import datetime
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
+import json
 
 
 
@@ -27,6 +28,7 @@ class ClientAuditor:
     def __init__(self):
         # tracks the audit step and the score at each step for each client IP, ex: {'127.0.0.1': {'step': 1, 'base_score': 'A', 'failed_attack': False} }
         self.client_state = {}
+        self.reports = {}
     
     def request(self, flow : http.HTTPFlow):
         """
@@ -76,7 +78,15 @@ class ClientAuditor:
         
         # initializes new client
         if client_key not in self.client_state:
-            self.client_state[client_key] = {'step': 1, 'base_score': 'A', 'failed_attack': False}
+            self.client_state[client_key] = {'step': 1, 'base_score': 'A', 'failed_attack': False, 'report': {
+        'client_ip': client_ip,
+        'server_name': server_name,
+        'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'passive': {},
+        'certificate': {},
+        'attacks': [],
+        'final_grade': None
+        }}
             print(f"\n{BLUE}[*] NEW TARGET CONNECTION: {client_ip} -> {server_name} - Starting Audit Sequence{RESET}")
 
         step = self.client_state[client_key]['step']
@@ -89,7 +99,7 @@ class ClientAuditor:
             ctx.options.ciphers_server = None
             ctx.options.tls_version_client_max = "TLS1_3"
            
-            self.audit_passive(data)
+            self.audit_passive(data, client_key)
         
         elif step == 2:
             print(f"{YELLOW}[MODE] Active Attack - Forcing TLS 1.0{RESET}")
@@ -123,7 +133,7 @@ class ClientAuditor:
 
         # only run this audit during step 1 (baseline)
         if step == 1:
-            self.audit_server_certificate(data)
+            self.audit_server_certificate(data, client_key)
 
     def tls_established_client(self, data: tls.TlsData):
         """
@@ -153,31 +163,56 @@ class ClientAuditor:
 
             version_used = data.conn.tls_version
             print(f"    (Debug: Actual Version Negotiated: {version_used})")
-
+            attack = {
+                'step': step,
+                'attack': 'TLS Downgrade',
+                'details': f'Negotiated {version_used}',
+                'success': None
+            }
             if version_used in ["TLSv1.2", "TLSv1.3"]:
                 print(f"{YELLOW}[!] WARNING: Step 2 connection succeeded but used {version_used}. The Downgrade failed (Good for client?), but unexpected.{RESET}")
+                attack['success'] = False
             else: 
                 print(f"{RED}[!] FAIL: Client accepted TLS 1.0 Downgrade!{RESET}")
                 print(f"    (Client did not enforce Minimum TLS Version)")
                 self.client_state[client_key]['failed_attack'] = True
+                attack['success'] = True
+
+            self.client_state[client_key]['report']['attacks'].append(attack)
 
         elif step == 3:
 
             cipher_used = str(data.conn.cipher)
             is_secure_aead = "GCM" in cipher_used or "POLY1305" in cipher_used
-
+            attack = {
+                'step': step,
+                'attack': 'Weak Cipher',
+                'details': f'Negotiated {cipher_used}',
+                'success': None
+            }
             if not is_secure_aead:
                 print(f"{RED}[!] FAIL: Client accepted WEAK CIPHER ({cipher_used})!{RESET}")
                 print(f"    (Client did not enforce secure cipher suite)")
                 self.client_state[client_key]['failed_attack'] = True
+                attack['success'] = True
             else:
                 print(f"{GREEN}[V] OK: ATTACK FAILED - Connection succeeded with STRONG cipher ({cipher_used}){RESET}")
                 print(f"    (Client enforced secure cipher suite)")
-        
+                attack['success'] = False
+
+            self.client_state[client_key]['report']['attacks'].append(attack)
+
         elif step == 4:
             print(f"{RED}[!] FAIL: Client accepted an EXPIRED/INVALID Certificate!{RESET}")
             print(f"    (Client does not properly validate trust chain)")
             self.client_state[client_key]['failed_attack'] = True
+            attack = {
+                'step': step,
+                'attack': 'Invalid Certificate',
+                'details': 'Expired / self-signed certificate accepted',
+                'success': True
+            }
+            self.client_state[client_key]['report']['attacks'].append(attack)
 
         # prepare for next step
         self.advance_step(client_key)
@@ -202,12 +237,33 @@ class ClientAuditor:
 
         if step == 2:
             print(f"{GREEN}[V] SUCCESS: Client blocked TLS 1.0 attack.{RESET}")
-
+            attack = {
+                'step': step,
+                'attack': 'TLS Downgrade',
+                'details': 'Handshake aborted by client',
+                'success': False
+            }
+            self.client_state[client_key]['report']['attacks'].append(attack)
+        
         elif step == 3:
             print(f"{GREEN}[V] SUCCESS: Client blocked Weak Cipher attack.{RESET}")
-        
+            attack = {
+                'step': step,
+                'attack': 'Weak Cipher',
+                'details': 'Handshake aborted by client',
+                'success': False
+            }
+            self.client_state[client_key]['report']['attacks'].append(attack)
+
         elif step == 4:
             print(f"{GREEN}[V] SUCCESS: Client blocked Invalid Certificate.{RESET}")
+            attack = {
+                'step': step,
+                'attack': 'Invalid Certificate',
+                'details': 'Handshake aborted by client',
+                'success': False
+            }
+            self.client_state[client_key]['report']['attacks'].append(attack)
 
         # prepare for next step
         self.advance_step(client_key)
@@ -241,7 +297,12 @@ class ClientAuditor:
             print(f"       FINAL SECURITY REPORT FOR CONNECTION: {ip} -> {name}")
             print(f"       OVERALL GRADE: {color}{BOLD}{final_grade}{RESET}")
             print("="*45 + "\n")
-            
+
+            report = self.client_state[client_key]['report']
+            report['final_grade'] = final_grade
+
+            self.export_json(report)
+
             # cleanup
             del self.client_state[client_key]
         
@@ -253,7 +314,7 @@ class ClientAuditor:
         ctx.options.tls_version_client_max = "TLS1_3"
         ctx.options.certs = []
 
-    def audit_passive(self, data):
+    def audit_passive(self, data, client_key):
         """
         Analyzes the client hello packet to see what the client offered.
         It compares the clien't offered cipher suites against the list of weak ciphers and prints an alert if the client is willing to use them.
@@ -273,8 +334,16 @@ class ClientAuditor:
         weak = [str(c) for c in ciphers if any(k in str(c) for k in WEAK_CIPHER_KEYWORDS)]
         if weak:
             print(f"  {RED}[!] AUDIT ALERT:{RESET} Client offered {len(weak)} weak ciphers (Passive)")
+        state = self.client_state[client_key]['report']
+        state['passive'] = {
+        'sni': sni,
+        'cipher_count': len(ciphers),
+        'offered_weak_ciphers': weak,
+        'scsv_supported': SCSV_CIPHER_CODE in ciphers
+        }
 
-    def audit_server_certificate(self, data):
+
+    def audit_server_certificate(self, data, client_key):
         """
         Analyzes the certificate the client just trusted (Validation Check).
         It runs after the handshake succeeds to verify if the client accepted a weak identity.
@@ -324,6 +393,16 @@ class ClientAuditor:
 
         except Exception as e:
             print(f" |— {YELLOW}[!] INFO:{RESET} Could not analyze certificate: {e}")
+        
+        state = self.client_state[client_key]['report']['certificate']
+        state.update({
+            'key_type': pub_key.__class__.__name__,
+            'key_size': bits,
+            'signature_algorithm': sig_algo,
+            'weak_key': bits < 2048 if isinstance(pub_key, rsa.RSAPublicKey) else False,
+            'weak_signature': "sha1" in sig_algo.lower() or "md5" in sig_algo.lower()
+        })
+
 
     def analyze_connection_quality(self, data):
         """
@@ -381,6 +460,15 @@ class ClientAuditor:
                 encryption_algorithm=serialization.NoEncryption()
             ))
         print(f"{BLUE}[*] Generated temporary bad certificate: {BAD_CERT_FILE}{RESET}")
+
+    def export_json(self, report):
+        filename = f"tls_audit_{report['client_ip']}_{report['server_name']}.json"
+        filename = filename.replace(":", "_")
+
+        with open(filename, "w") as f:
+            json.dump(report, f, indent=4)
+
+        print(f"{BLUE}[*] TLS Audit report exported: {filename}{RESET}")
 
 
 addons = [ClientAuditor()]

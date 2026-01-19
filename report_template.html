@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>TLS Audit Report</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+        }
+        h1, h2 {
+            color: #2c3e50;
+        }
+        .good { color: green; }
+        .bad { color: red; }
+        .warn { color: orange; }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 15px;
+        }
+        th, td {
+            border: 1px solid #ccc;
+            padding: 8px;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+
+<body>
+
+<h1>TLS Client Security Audit</h1>
+
+<p><b>Client IP:</b> {{ report.client_ip }}</p>
+<p><b>Server:</b> {{ report.server_name }}</p>
+<p><b>Timestamp:</b> {{ report.timestamp }}</p>
+<p><b>Final Grade:</b>
+   <span class="{{ 'bad' if report.final_grade == 'F' else 'good' }}">
+       {{ report.final_grade }}
+   </span>
+</p>
+
+<h2>Passive Analysis</h2>
+<ul>
+    <li>SNI: {{ report.passive.sni }}</li>
+    <li>Ciphers offered: {{ report.passive.cipher_count }}</li>
+    <li>SCSV supported: {{ report.passive.scsv_supported }}</li>
+    <li>Weak ciphers offered: {{ report.passive.offered_weak_ciphers | length }}</li>
+</ul>
+
+<h2>Certificate Analysis</h2>
+<ul>
+    <li>Key type: {{ report.certificate.key_type }}</li>
+    <li>Key size: {{ report.certificate.key_size }} bits</li>
+    <li>Signature: {{ report.certificate.signature_algorithm }}</li>
+    <li>Weak key: {{ report.certificate.weak_key }}</li>
+    <li>Weak signature: {{ report.certificate.weak_signature }}</li>
+</ul>
+
+<h2>Active Attacks</h2>
+
+<table>
+    <tr>
+        <th>Step</th>
+        <th>Attack</th>
+        <th>Details</th>
+        <th>Result</th>
+    </tr>
+
+    {% for attack in report.attacks %}
+    <tr>
+        <td>{{ attack.step }}</td>
+        <td>{{ attack.attack }}</td>
+        <td>{{ attack.details }}</td>
+        <td>
+            {% if attack.success %}
+                <span class="bad">VULNERABLE</span>
+            {% else %}
+                <span class="good">BLOCKED</span>
+            {% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+
+</body>
+</html>
