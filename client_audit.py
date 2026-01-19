@@ -65,6 +65,17 @@ class ClientAuditor:
             ctx.options.ciphers_server = "ALL:!aNULL:!eNULL:!LOW:!EXPORT:RC4-SHA"
             # restore TLS version to allow the cipher test to run
             ctx.options.tls_version_client_max = "TLS1_3"
+        
+        elif step == 4:
+            print(f"{YELLOW}[MODE] Active Attack - Forcing Legacy RSA CBC Ciphers{RESET}")
+            ctx.options.ciphers_server = (
+            #"AES128-SHA:"
+            #"AES256-SHA:"
+            "CAMELLIA128-SHA:"
+            #"DES-CBC3-SHA"
+            )
+        ctx.options.tls_version_client_max = "TLS1_2"
+
 
     def tls_established_server(self, data: tls.TlsData):
         """
@@ -108,6 +119,11 @@ class ClientAuditor:
             print(f"{RED}[!] FAIL: Client accepted WEAK CIPHER (RC4)!{RESET}")
             print(f"    (Client did not enforce secure cipher suite)")
             self.client_state[client_ip]['failed_attack'] = True
+        
+        elif step == 4:
+            print(f"{RED}[!] FAIL: Client accepted legacy RSA + CBC cipher suite!{RESET}")
+            self.client_state[client_ip]['failed_attack'] = True
+
 
         # prepare for next step
         self.advance_step(client_ip)
@@ -130,6 +146,10 @@ class ClientAuditor:
 
         elif step == 3:
             print(f"{GREEN}[V] SUCCESS: Client blocked Weak Cipher attack.{RESET}")
+        
+        elif step == 4:
+            print(f"{GREEN}[V] SUCCESS: Client rejected legacy RSA + CBC cipher suites.{RESET}")
+
 
         # prepare for next step
         self.advance_step(client_ip)
@@ -145,7 +165,7 @@ class ClientAuditor:
         
         current_step = self.client_state[client_ip]['step']
 
-        if current_step == 3:
+        if current_step == 4:
             # retrieves the saved score from step 1
             base = self.client_state[client_ip]['base_score']
 

@@ -11,19 +11,23 @@ sleep 3
 echo ""
 echo "*** Starting script ***"
 
-# Runs the 3 tests
+# Runs the 4 tests
 
 echo ""
 echo ">>> Triggering connection 1 (Baseline Analysis)..."
-curl --proxy http://127.0.0.1:8080 https://www.google.com -k -s -o /dev/null
+curl --proxy http://127.0.0.1:8080 --tlsv1.2 --cipher 'ECDHE+AESGCM' https://www.insa-lyon.fr -k -s -o /dev/null
 
 echo ""
 echo ">>> Triggering connection 2 (TLS 1.0 Attack)..."
-curl --proxy http://127.0.0.1:8080 https://www.google.com -k -s -o /dev/null
+curl --proxy http://127.0.0.1:8080 --tlsv1.2 --cipher 'ECDHE+AESGCM' https://www.insa-lyon.fr -k -s -o /dev/null
 
 echo ""
 echo ">>> Triggering connection 3 (Weak Cipher Attack)..."
-curl --proxy http://127.0.0.1:8080 https://www.google.com -k -s -o /dev/null
+curl --proxy http://127.0.0.1:8080 --tlsv1.2 --cipher 'ECDHE+AESGCM' https://www.insa-lyon.fr -k -s -o /dev/null
+
+echo ""
+echo ">>> Triggering connection 4 (Legacy RSA + CBC Cipher Attack)..."
+curl --proxy http://127.0.0.1:8080 --tlsv1.2 --cipher 'ECDHE+AESGCM' https://www.insa-lyon.fr -k -s -o /dev/null
 
 # cleanup (stops the tool)
 kill $MITM_PID
