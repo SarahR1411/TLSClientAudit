@@ -1,6 +1,13 @@
-from mitmproxy import tls, ctx
-from tlsaudit import analyze_tls
+from mitmproxy import tls, ctx, http
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, dsa, ed25519, ed448
+import os 
+import datetime
+import requests
+from cryptography import x509
+from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives import hashes, serialization
+
+
 
 # for changing the colors in the terminal
 RED = "\033[91m"
@@ -15,23 +22,53 @@ WEAK_CIPHER_KEYWORDS = ["_RC4_", "_MD5_", "_DES_", "_NULL_", "_EXPORT_", "_CBC_"
 DEPRECATED_VERSIONS = ["SSLv2", "SSLv3", "TLSv1", "TLSv1.1"] 
 SCSV_CIPHER_CODE = 0x5600 
 
+BAD_CERT_FILE = "temp_bad_cert.pem"
+
+CIPHERSUITE_API = "https://ciphersuite.info/api/cs/"
+SECURITY_PRIORITY = {
+    "insecure": 0,
+    "weak": 1,
+    "secure": 2,
+    "recommended": 3
+}
+
 class ClientAuditor:
     def __init__(self):
         # tracks the audit step and the score at each step for each client IP, ex: {'127.0.0.1': {'step': 1, 'base_score': 'A', 'failed_attack': False} }
         self.client_state = {}
+    
+    def request(self, flow : http.HTTPFlow):
+        """
+        Listens for HTTP requests.
+        Used to detect when a user visits mitm.it to install mitmproxy's CA.
+        """
+
+        if "mitm.it" in flow.request.pretty_host:
+            client_ip = flow.client_conn.address[0]
+            print(f"{BLUE}[*] SETUP DETECTED: {client_ip} is downloading the Certificate at mitm.it{RESET}")
 
     def load(self, loader):
         # makes sure we start with 'clean' default settings
         ctx.options.ciphers_server = None
         ctx.options.tls_version_client_min = "TLS1"
         ctx.options.tls_version_client_max = "TLS1_3"
+        ctx.options.certs = []
+
+        self.generate_bad_cert()
+
+        print("\n" + "="*50)
+        print(f"{BOLD}   CLIENT AUDITOR LOADED{RESET}")
+        print(f"   1. Connect device to WiFi")
+        print(f"   2. Go to {BOLD}http://mitm.it{RESET} to install CA")
+        print(f"   3. Open target app to start audit")
+        print("="*50 + "\n")
 
     def tls_clienthello(self, data: tls.ClientHelloData):
         """
         Triggered when the client sends the initial hello packet, before the hanshake is finished 
         so we can intervene with an attack.
 
-        - First it identifies the client by its IP
+        - First it identifies the client by its IP and the destination website
         - Then it checks which step the client is currently on
         - Finally, it modifies the 'ctx.options' to inject the specific attack for that step : 
             - step 1 : no changes (passive observation)
@@ -39,22 +76,28 @@ class ClientAuditor:
             - step 3 : forced weak encryption attack
         """
         client_ip = data.context.client.peername[0]
+        server_name = data.client_hello.sni or "unknown_target"
+
+        if "mitm.it" in server_name:
+            return
+
+        client_key = (client_ip, server_name) # creates a unique key for a specific connection
         
         # initializes new client
-        if client_ip not in self.client_state:
-            self.client_state[client_ip] = {'step': 1, 'base_score': 'A', 'failed_attack': False}
-            print(f"\n{BLUE}[*] NEW TARGET: {client_ip} - Starting Audit Sequence{RESET}")
+        if client_key not in self.client_state:
+            self.client_state[client_key] = {'step': 1, 'base_score': 'A', 'failed_attack': False}
+            print(f"\n{BLUE}[*] NEW TARGET CONNECTION: {client_ip} -> {server_name} - Starting Audit Sequence{RESET}")
 
-        step = self.client_state[client_ip]['step']
+        step = self.client_state[client_key]['step']
         print("-" * 50)
-        print(f"[#] CONNECTION #{step} from {client_ip}")
+        print(f"[#] CONNECTION #{step} from {client_ip} to {server_name}")
 
         
         if step == 1:
             print(f"{YELLOW}[MODE] Passive Analysis & Server Audit{RESET}")
             ctx.options.ciphers_server = None
             ctx.options.tls_version_client_max = "TLS1_3"
-           
+            
             self.audit_passive(data)
         
         elif step == 2:
@@ -62,20 +105,82 @@ class ClientAuditor:
             ctx.options.tls_version_client_max = "TLS1" 
 
         elif step == 3:
-            print(f"{YELLOW}[MODE] Active Attack - Forcing RC4/Weak Ciphers{RESET}")
-            ctx.options.ciphers_server = "ALL:!aNULL:!eNULL:!LOW:!EXPORT:RC4-SHA"
-            # restore TLS version to allow the cipher test to run
-            ctx.options.tls_version_client_max = "TLS1_3"
-        
+            print(f"{YELLOW}[MODE] Active Attack - Choosing weakest cipher (API-based){RESET}")
+            ctx.options.tls_version_client_max = "TLS1_2"
+
+            client_ciphers = [str(c) for c in data.client_hello.cipher_suites]
+            chosen, security = self.choose_weakest_cipher(client_ciphers)
+            
+            
+            if chosen:
+                print(f"{RED}[!] Forcing weakest available cipher: {chosen} ({security}){RESET}")
+
+            # OpenSSL naming conversion (suffisant pour RSA/CBC)
+                openssl_name = (
+                    chosen.replace("TLS_", "")
+                        .replace("_WITH_", "-")
+                        .replace("_", "-")
+                )
+                print("babababababa   :::   ",openssl_name)
+
+                ctx.options.ciphers_server = openssl_name
+            
+            #print(f"{BLUE}[*] Client offered cipher suite IDs:{RESET}")
+            #for cs in data.client_hello.cipher_suites:
+            #    print("   ", hex(cs))
+
+            
+            else:
+                print(f"{YELLOW}[!] No weak cipher found, using default behavior{RESET}")
+
+
         elif step == 4:
-            print(f"{YELLOW}[MODE] Active Attack - Forcing Legacy RSA CBC Ciphers{RESET}")
-            ctx.options.ciphers_server = (
-            #"AES128-SHA:"
-            #"AES256-SHA:"
-            "CAMELLIA128-SHA:"
-            "DES-CBC3-SHA"
-            )
-        #ctx.options.tls_version_client_max = "TLS1_2"
+            print(f"{YELLOW}[MODE] Step 4: Serving Invalid/Expired Certificate{RESET}")
+            ctx.options.ciphers_server = None
+            ctx.options.tls_version_client_max = "TLS1_3"
+            ctx.options.certs = [f"*={BAD_CERT_FILE}"]
+
+    def query_ciphersuite_info(self, cipher_name):
+        """
+        Queries ciphersuite.info API and returns security level
+        """
+        print("nom de la cipher : ",cipher_name)
+        try:
+            url = f"{CIPHERSUITE_API}{cipher_name}/"
+            r = requests.get(url, timeout=2)
+            if r.status_code != 200:
+                return None
+
+            data = r.json()
+            entry = data.get(cipher_name)
+            if not entry:
+                return None
+
+            return entry.get("security", "unknown")
+
+        except Exception as e:
+            print(f"{YELLOW}[!] API error for {cipher_name}: {e}{RESET}")
+            return None
+
+
+    def choose_weakest_cipher(self, cipher_list):
+        """
+        From a list of cipher names, chooses the weakest one
+        according to ciphersuite.info
+        """
+        classified = []
+
+        for cipher in cipher_list:
+            security = self.query_ciphersuite_info(cipher)
+            if security:
+                classified.append((cipher, security))
+
+        if not classified:
+            return None, None
+
+        classified.sort(key=lambda x: SECURITY_PRIORITY.get(x[1], 99))
+        
+        return classified[0]  # (cipher_name, security)
 
 
     def tls_established_server(self, data: tls.TlsData):
@@ -86,7 +191,12 @@ class ClientAuditor:
         - If we're in step 1 : We analyze the real server's certificate context.
         """
         client_ip = data.context.client.peername[0]
-        step = self.client_state[client_ip]['step']
+        server_name = data.conn.sni or "unknown_target"
+        client_key = (client_ip, server_name)
+
+        if client_key not in self.client_state: return # safety check if the key exists
+
+        step = self.client_state[client_key]['step']
 
         # only run this audit during step 1 (baseline)
         if step == 1:
@@ -102,47 +212,52 @@ class ClientAuditor:
         """
 
         client_ip = data.context.client.peername[0]
-        step = self.client_state[client_ip]['step']
-
-        print(f"[+] HANDSHAKE COMPLETED with {client_ip}")
+        server_name = data.conn.sni or "unknown_target"
+        client_key = (client_ip, server_name)
         
-        analysis = analyze_tls(data.conn)
+        if client_key not in self.client_state: return
 
-        print("\n[TLSAudit]")
-        print(f" Version TLS : {analysis['version']}")
-        print(f" Cipher      : {analysis['cipher']}")
-        print(f" PFS         : {analysis['pfs']}")
-        print(f" AEAD        : {analysis['aead']}")
-        print(f" Résultat    : {analysis['grade']}")
+        step = self.client_state[client_key]['step']
 
+        print(f"[+] HANDSHAKE COMPLETED: {client_ip} -> {server_name}")
 
         if step == 1:
             score = self.analyze_connection_quality(data) # calculates 'C' but stores it for later
-            self.client_state[client_ip]['base_score'] = score
+            self.client_state[client_key]['base_score'] = score
             print(f"{GREEN}[V] Baseline data captured.{RESET}")
 
         elif step == 2:
-            print(f"{RED}[!] FAIL: Client accepted TLS 1.0 Downgrade!{RESET}")
-            print(f"    (Client did not enforce Minimum TLS Version)")
-            self.client_state[client_ip]['failed_attack'] = True
+
+            version_used = data.conn.tls_version
+            print(f"    (Debug: Actual Version Negotiated: {version_used})")
+
+            if version_used in ["TLSv1.2", "TLSv1.3"]:
+                print(f"{YELLOW}[!] WARNING: Step 2 connection succeeded but used {version_used}. The Downgrade failed (Good for client?), but unexpected.{RESET}")
+            else: 
+                print(f"{RED}[!] FAIL: Client accepted TLS 1.0 Downgrade!{RESET}")
+                print(f"    (Client did not enforce Minimum TLS Version)")
+                self.client_state[client_key]['failed_attack'] = True
 
         elif step == 3:
-            print(f"{RED}[!] FAIL: Client accepted WEAK CIPHER (RC4)!{RESET}")
-            print(f"    (Client did not enforce secure cipher suite)")
-            self.client_state[client_ip]['failed_attack'] = True
+
+            cipher_used = str(data.conn.cipher)
+            is_secure_aead = "GCM" in cipher_used or "POLY1305" in cipher_used
+
+            if not is_secure_aead:
+                print(f"{RED}[!] FAIL: Client accepted WEAK CIPHER ({cipher_used})!{RESET}")
+                print(f"    (Client did not enforce secure cipher suite)")
+                self.client_state[client_key]['failed_attack'] = True
+            else:
+                print(f"{GREEN}[V] OK: ATTACK FAILED - Connection succeeded with STRONG cipher ({cipher_used}){RESET}")
+                print(f"    (Client enforced secure cipher suite)")
         
         elif step == 4:
-            print(f"{RED}[!] FAIL: Client accepted legacy RSA + CBC cipher suite!{RESET}")
-            self.client_state[client_ip]['failed_attack'] = True
-            from rapport import generate_pdf
-            generate_pdf(analysis)
-
+            print(f"{RED}[!] FAIL: Client accepted an EXPIRED/INVALID Certificate!{RESET}")
+            print(f"    (Client does not properly validate trust chain)")
+            self.client_state[client_key]['failed_attack'] = True
 
         # prepare for next step
-        self.advance_step(client_ip)
-        
-
-
+        self.advance_step(client_key)
 
     def tls_failed_client(self, data: tls.TlsData):
         """
@@ -152,7 +267,12 @@ class ClientAuditor:
         """
 
         client_ip = data.context.client.peername[0]
-        step = self.client_state[client_ip]['step']
+        server_name = data.conn.sni or "unknown_target"
+        client_key = (client_ip, server_name)
+
+        if client_key not in self.client_state: return
+
+        step = self.client_state[client_key]['step']
         
         error_msg = data.conn.error
         print(f"[-] HANDSHAKE FAILED (Reason: {error_msg})")
@@ -164,49 +284,51 @@ class ClientAuditor:
             print(f"{GREEN}[V] SUCCESS: Client blocked Weak Cipher attack.{RESET}")
         
         elif step == 4:
-            print(f"{GREEN}[V] SUCCESS: Client rejected legacy RSA + CBC cipher suites.{RESET}")
-
+            print(f"{GREEN}[V] SUCCESS: Client blocked Invalid Certificate.{RESET}")
 
         # prepare for next step
-        self.advance_step(client_ip)
+        self.advance_step(client_key)
 
-    def advance_step(self, client_ip):
+    def advance_step(self, client_key):
         """
         Increments the state machine. 
         It's called after every connection attempt (pass or fail) and does the following:
-            - Increases the step counter for the given IP
+            - Increases the step counter for the specific connection (IP + target)
             - Resets the global proxy settings ('ctx.options') back to default
             - If step 3 is finished, it calculates and prints the final report card
         """
         
-        current_step = self.client_state[client_ip]['step']
+        current_step = self.client_state[client_key]['step']
 
         if current_step == 4:
             # retrieves the saved score from step 1
-            base = self.client_state[client_ip]['base_score']
+            base = self.client_state[client_key]['base_score']
 
             # checks the flag from steps 2/3
-            failed = self.client_state[client_ip]['failed_attack']
+            failed = self.client_state[client_key]['failed_attack']
 
             # if the client failed an attack, it forces F. Otherwise, it uses the base score
             final_grade = "F" if failed else base
 
             color = GREEN if final_grade == "A" else (YELLOW if final_grade in ["B", "C"] else RED)
 
+            ip, name = client_key
+
             print("\n" + "="*45)
-            print(f"       FINAL SECURITY REPORT: {client_ip}")
+            print(f"       FINAL SECURITY REPORT FOR CONNECTION: {ip} -> {name}")
             print(f"       OVERALL GRADE: {color}{BOLD}{final_grade}{RESET}")
             print("="*45 + "\n")
             
             # cleanup
-            del self.client_state[client_ip]
+            del self.client_state[client_key]
         
         else:
-            self.client_state[client_ip]['step'] += 1
+            self.client_state[client_key]['step'] += 1
 
         # resets the global proxy settings back to default
         ctx.options.ciphers_server = None
         ctx.options.tls_version_client_max = "TLS1_3"
+        ctx.options.certs = []
 
     def audit_passive(self, data):
         """
@@ -313,5 +435,29 @@ class ClientAuditor:
         if "RC4" in cipher_name or "MD5" in cipher_name: score = "F"
         
         return score
+    def generate_bad_cert(self):
+        """Generates a self-signed certificate that expired recently (2 days ago)"""
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, u"bad-cert.test")])
+        
+        cert = x509.CertificateBuilder().subject_name(subject).issuer_name(issuer).public_key(
+            key.public_key()
+        ).serial_number(x509.random_serial_number()).not_valid_before(
+            datetime.datetime.utcnow() - datetime.timedelta(days=92)
+        ).not_valid_after(
+            datetime.datetime.utcnow() - datetime.timedelta(days=2)
+        ).add_extension(
+            x509.BasicConstraints(ca=True, path_length=None), critical=True,
+        ).sign(key, hashes.SHA256())
+
+        with open(BAD_CERT_FILE, "wb") as f:
+            f.write(cert.public_bytes(serialization.Encoding.PEM))
+            f.write(key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption()
+            ))
+        print(f"{BLUE}[*] Generated temporary bad certificate: {BAD_CERT_FILE}{RESET}")
+
 
 addons = [ClientAuditor()]
