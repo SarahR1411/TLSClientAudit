@@ -441,13 +441,36 @@ class ClientAuditor:
         """Generates a self-signed certificate that expired recently (2 days ago)"""
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, u"bad-cert.test")])
-        
+
+        #Certificate whose validity has expired
         cert = x509.CertificateBuilder().subject_name(subject).issuer_name(issuer).public_key(
             key.public_key()
         ).serial_number(x509.random_serial_number()).not_valid_before(
             datetime.datetime.utcnow() - datetime.timedelta(days=92)
         ).not_valid_after(
             datetime.datetime.utcnow() - datetime.timedelta(days=2)
+        ).add_extension(
+            x509.BasicConstraints(ca=True, path_length=None), critical=True,
+        ).sign(key, hashes.SHA256())
+
+        #Certificate signed with SHA1
+        cert2 = x509.CertificateBuilder().subject_name(subject).issuer_name(issuer).public_key(
+            key.public_key()
+        ).serial_number(x509.random_serial_number()).not_valid_before(
+            datetime.datetime.utcnow()
+        ).not_valid_after(
+            datetime.datetime.utcnow() + datetime.timedelta(days=360)
+        ).add_extension(
+            x509.BasicConstraints(ca=True, path_length=None), critical=True,
+        ).sign(key, hashes.SHA1())
+
+        #Certificate for a different domain name
+        cert3 = x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, u"bad-cert2.test")])).issuer_name(issuer).public_key(
+            key.public_key()
+        ).serial_number(x509.random_serial_number()).not_valid_before(
+            datetime.datetime.utcnow()
+        ).not_valid_after(
+            datetime.datetime.utcnow() + datetime.timedelta(days=360)
         ).add_extension(
             x509.BasicConstraints(ca=True, path_length=None), critical=True,
         ).sign(key, hashes.SHA256())
