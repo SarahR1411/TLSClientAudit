@@ -3,6 +3,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa, ec, dsa, ed25519, ed4
 import os 
 import datetime
 import requests
+import csv
+import io
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
@@ -108,7 +110,7 @@ class ClientAuditor:
             print(f"{YELLOW}[MODE] Active Attack - Choosing weakest cipher (API-based){RESET}")
             ctx.options.tls_version_client_max = "TLS1_2"
 
-            client_ciphers = [str(c) for c in data.client_hello.cipher_suites]
+            client_ciphers = list(data.client_hello.cipher_suites)
             chosen, security = self.choose_weakest_cipher(client_ciphers)
             
             
@@ -163,12 +165,42 @@ class ClientAuditor:
             return None
 
 
-    def choose_weakest_cipher(self, cipher_list):
+    def choose_weakest_cipher(self, cipher_list_id):
         """
         From a list of cipher names, chooses the weakest one
         according to ciphersuite.info
         """
         classified = []
+        cipher_list = []
+        
+        url = "https://www.iana.org/assignments/tls-parameters/tls-parameters-4.csv"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        
+        reader = csv.DictReader(io.StringIO(response.text))
+        
+        cipher_map = {}
+
+        for row in reader:
+            value = row.get("Value")
+            name = row.get("Description")
+
+            # Ignore les entrées non valides
+            if not value or not name:
+                continue
+            
+            try:
+                b1,b2 = value.split(",")
+                cipher_id = (int(b1, 16) << 8) | int(b2, 16)
+                cipher_map[cipher_id] = name
+            except Exception:
+                continue
+        
+        #cipher_id_to_name = load_iana_cipher()
+        for suite in cipher_list_id :
+            cipher_name = cipher_map.get(suite)
+            if cipher_name:
+                cipher_list.append(cipher_name)
 
         for cipher in cipher_list:
             security = self.query_ciphersuite_info(cipher)
@@ -181,6 +213,12 @@ class ClientAuditor:
         classified.sort(key=lambda x: SECURITY_PRIORITY.get(x[1], 99))
         
         return classified[0]  # (cipher_name, security)
+    
+    
+    #def load_iana_cipher(self):
+        
+
+        #return cipher_map
 
 
     def tls_established_server(self, data: tls.TlsData):
