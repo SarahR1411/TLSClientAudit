@@ -29,6 +29,7 @@ class ClientAuditor:
     def __init__(self):
         # tracks the audit step and the score at each step for each client IP, ex: {'127.0.0.1': {'step': 1, 'base_score': 'A', 'failed_attack': False} }
         self.client_state = {}
+        self.unique_reports = {} # stores unique reports
     
     def request(self, flow : http.HTTPFlow):
         """
@@ -54,6 +55,7 @@ class ClientAuditor:
         print(f"   1. Connect device to WiFi")
         print(f"   2. Go to {BOLD}http://mitm.it{RESET} to install CA")
         print(f"   3. Open target app to start audit")
+        print(f"   4. Press {BOLD}Ctrl+C{RESET} to stop and generate PDF reports")
         print("="*50 + "\n")
 
     def tls_clienthello(self, data: tls.ClientHelloData):
@@ -293,7 +295,7 @@ class ClientAuditor:
             print("="*45 + "\n")
 
             self.client_state[client_key]['report']['final_grade'] = final_grade
-            self.export_pdf(self.client_state[client_key]['report'])
+            self.unique_reports[client_key] = self.client_state[client_key]['report']
 
             # cleanup
             del self.client_state[client_key]
@@ -457,24 +459,35 @@ class ClientAuditor:
                 encryption_algorithm=serialization.NoEncryption()
             ))
         print(f"{BLUE}[*] Generated temporary bad certificate: {BAD_CERT_FILE}{RESET}")
-    def export_pdf(self, report):
+    def done(self):
+        """
+        Triggered when Ctrl+C is pressed
+        It takes all the stored reports and generates one PDF.
+        """
+        print(f"\n{BLUE}[*] STOPPING AUDIT... Generating global report...{RESET}")
+        
+        if not self.unique_reports:
+            print(f"{YELLOW}[!] No completed audits to report.{RESET}")
+            return
+
         try:
-            # load template
+            #load template
             env = Environment(loader=FileSystemLoader("."))
             template = env.get_template(TEMPLATE_FILE)
 
-            # render HTML
-            html_content = template.render(report=report)
+            #convert dict values to a list and pass it as 'reports' 
+            all_reports_list = list(self.unique_reports.values())
+            
+            #render HTML with the list of reports
+            html_content = template.render(reports=all_reports_list)
 
-            # generate Filename
-            safe_server = report['server_name'].replace(".", "_").replace(":", "")
-            filename = f"tls_audit_{report['client_ip']}_{safe_server}.pdf"
-
+            output_pdf = "GLOBAL_CLIENT_AUDIT_REPORT.pdf"
+            
             # write PDF
-            HTML(string=html_content).write_pdf(filename)
-            print(f"{BLUE}[*] PDF Report generated: {filename}{RESET}")
+            HTML(string=html_content).write_pdf(output_pdf)
+            print(f"{GREEN}[SUCCESS] Report generated: {output_pdf}{RESET}")
 
         except Exception as e:
-            print(f"{RED}[!] PDF Generation failed: {e}{RESET}")
+            print(f"{RED}[!] PDF Generation Failed: {e}{RESET}")
 
 addons = [ClientAuditor()]
