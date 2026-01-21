@@ -5,7 +5,8 @@ import datetime
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
-
+from jinja2 import Environment, FileSystemLoader
+from weasyprint import HTML
 
 
 # for changing the colors in the terminal
@@ -22,6 +23,7 @@ DEPRECATED_VERSIONS = ["SSLv2", "SSLv3", "TLSv1", "TLSv1.1"]
 SCSV_CIPHER_CODE = 0x5600 
 
 BAD_CERT_FILE = "temp_bad_cert.pem"
+TEMPLATE_FILE = "report_template.html"
 
 class ClientAuditor:
     def __init__(self):
@@ -76,7 +78,20 @@ class ClientAuditor:
         
         # initializes new client
         if client_key not in self.client_state:
-            self.client_state[client_key] = {'step': 1, 'base_score': 'A', 'failed_attack': False}
+            self.client_state[client_key] = {
+                'step': 1, 
+                'base_score': 'A', 
+                'failed_attack': False, 
+                'report': {
+                    'client_ip': client_ip,
+                    'server_name': server_name,
+                    'timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    'passive': {},
+                    'certificate': {},
+                    'attacks': [],
+                    'final_grade': None
+                }
+            }
             print(f"\n{BLUE}[*] NEW TARGET CONNECTION: {client_ip} -> {server_name} - Starting Audit Sequence{RESET}")
 
         step = self.client_state[client_key]['step']
@@ -141,6 +156,7 @@ class ClientAuditor:
         if client_key not in self.client_state: return
 
         step = self.client_state[client_key]['step']
+        report_attacks = self.client_state[client_key]['report']['attacks']
 
         print(f"[+] HANDSHAKE COMPLETED: {client_ip} -> {server_name}")
 
@@ -154,30 +170,60 @@ class ClientAuditor:
             version_used = data.conn.tls_version
             print(f"    (Debug: Actual Version Negotiated: {version_used})")
 
+            attack_result = {
+                'step': 2, 
+                'attack': 'TLS Downgrade', 
+                'details': f'Negotiated {version_used}', 
+                'success': None 
+            }
+
+
             if version_used in ["TLSv1.2", "TLSv1.3"]:
                 print(f"{YELLOW}[!] WARNING: Step 2 connection succeeded but used {version_used}. The Downgrade failed (Good for client?), but unexpected.{RESET}")
+                attack_result['success'] = False
             else: 
                 print(f"{RED}[!] FAIL: Client accepted TLS 1.0 Downgrade!{RESET}")
                 print(f"    (Client did not enforce Minimum TLS Version)")
                 self.client_state[client_key]['failed_attack'] = True
+                attack_result['success'] = True
+            
+            report_attacks.append(attack_result)
 
         elif step == 3:
 
             cipher_used = str(data.conn.cipher)
             is_secure_aead = "GCM" in cipher_used or "POLY1305" in cipher_used
 
+            attack_result = {
+                'step': 3, 
+                'attack': 'Weak Cipher', 
+                'details': f'Negotiated {cipher_used}', 
+                'success': None
+            }
+
             if not is_secure_aead:
                 print(f"{RED}[!] FAIL: Client accepted WEAK CIPHER ({cipher_used})!{RESET}")
                 print(f"    (Client did not enforce secure cipher suite)")
                 self.client_state[client_key]['failed_attack'] = True
+                attack_result['success'] = True
             else:
                 print(f"{GREEN}[V] OK: ATTACK FAILED - Connection succeeded with STRONG cipher ({cipher_used}){RESET}")
                 print(f"    (Client enforced secure cipher suite)")
+                attack_result['success'] = False
+            
+            report_attacks.append(attack_result)
         
         elif step == 4:
             print(f"{RED}[!] FAIL: Client accepted an EXPIRED/INVALID Certificate!{RESET}")
             print(f"    (Client does not properly validate trust chain)")
             self.client_state[client_key]['failed_attack'] = True
+
+            report_attacks.append({
+                'step': 4, 
+                'attack': 'Invalid Certificate', 
+                'details': 'Client accepted bad cert', 
+                'success': True
+            })
 
         # prepare for next step
         self.advance_step(client_key)
@@ -196,18 +242,22 @@ class ClientAuditor:
         if client_key not in self.client_state: return
 
         step = self.client_state[client_key]['step']
+        report_attacks = self.client_state[client_key]['report']['attacks']
         
         error_msg = data.conn.error
         print(f"[-] HANDSHAKE FAILED (Reason: {error_msg})")
 
         if step == 2:
             print(f"{GREEN}[V] SUCCESS: Client blocked TLS 1.0 attack.{RESET}")
+            report_attacks.append({'step': 2, 'attack': 'TLS Downgrade', 'details': 'Blocked by client', 'success': False})
 
         elif step == 3:
             print(f"{GREEN}[V] SUCCESS: Client blocked Weak Cipher attack.{RESET}")
+            report_attacks.append({'step': 3, 'attack': 'Weak Cipher', 'details': 'Blocked by client', 'success': False})
         
         elif step == 4:
             print(f"{GREEN}[V] SUCCESS: Client blocked Invalid Certificate.{RESET}")
+            report_attacks.append({'step': 4, 'attack': 'Invalid Certificate', 'details': 'Blocked by client', 'success': False})
 
         # prepare for next step
         self.advance_step(client_key)
@@ -241,7 +291,10 @@ class ClientAuditor:
             print(f"       FINAL SECURITY REPORT FOR CONNECTION: {ip} -> {name}")
             print(f"       OVERALL GRADE: {color}{BOLD}{final_grade}{RESET}")
             print("="*45 + "\n")
-            
+
+            self.client_state[client_key]['report']['final_grade'] = final_grade
+            self.export_pdf(self.client_state[client_key]['report'])
+
             # cleanup
             del self.client_state[client_key]
         
@@ -260,6 +313,8 @@ class ClientAuditor:
         """
         ciphers = data.client_hello.cipher_suites
         sni = data.client_hello.sni
+        client_ip = data.context.client.peername[0]
+        client_key = (client_ip, sni or "unknown_target")
         
         print(f" [*] SNI (Target Domain): {sni}")
         print(f" [*] Ciphers Offered: {len(ciphers)} suites")
@@ -273,6 +328,14 @@ class ClientAuditor:
         weak = [str(c) for c in ciphers if any(k in str(c) for k in WEAK_CIPHER_KEYWORDS)]
         if weak:
             print(f"  {RED}[!] AUDIT ALERT:{RESET} Client offered {len(weak)} weak ciphers (Passive)")
+        
+        if client_key in self.client_state:
+            self.client_state[client_key]['report']['passive'] = {
+                'sni': sni,
+                'cipher_count': len(ciphers),
+                'offered_weak_ciphers': weak,
+                'scsv_supported': SCSV_CIPHER_CODE in ciphers
+            }
 
     def audit_server_certificate(self, data):
         """
@@ -284,6 +347,10 @@ class ClientAuditor:
         """
         if not data.conn.certificate_list: return
         cert = data.conn.certificate_list[0]
+
+        client_ip = data.context.client.peername[0]
+        server_name = data.conn.sni or "unknown_target"
+        client_key = (client_ip, server_name)
         
         try:
             py_cert = cert.to_pyopenssl()
@@ -321,6 +388,15 @@ class ClientAuditor:
                 print(f" |— {RED}[!] CLIENT FAILURE: Client accepted a WEAK Signature ({sig_algo})!{RESET}")
             else:
                 print(f" |— {GREEN}[V] OK:{RESET} Client accepted a strong signature ({sig_algo})")
+            
+            if client_key in self.client_state:
+                self.client_state[client_key]['report']['certificate'] = {
+                    'key_type': pub_key.__class__.__name__,
+                    'key_size': bits,
+                    'signature_algorithm': sig_algo,
+                    'weak_key': bits < 2048 if isinstance(pub_key, rsa.RSAPublicKey) else False,
+                    'weak_signature': "sha1" in sig_algo.lower() or "md5" in sig_algo.lower()
+                }
 
         except Exception as e:
             print(f" |— {YELLOW}[!] INFO:{RESET} Could not analyze certificate: {e}")
@@ -381,6 +457,24 @@ class ClientAuditor:
                 encryption_algorithm=serialization.NoEncryption()
             ))
         print(f"{BLUE}[*] Generated temporary bad certificate: {BAD_CERT_FILE}{RESET}")
+    def export_pdf(self, report):
+        try:
+            # load template
+            env = Environment(loader=FileSystemLoader("."))
+            template = env.get_template(TEMPLATE_FILE)
 
+            # render HTML
+            html_content = template.render(report=report)
+
+            # generate Filename
+            safe_server = report['server_name'].replace(".", "_").replace(":", "")
+            filename = f"tls_audit_{report['client_ip']}_{safe_server}.pdf"
+
+            # write PDF
+            HTML(string=html_content).write_pdf(filename)
+            print(f"{BLUE}[*] PDF Report generated: {filename}{RESET}")
+
+        except Exception as e:
+            print(f"{RED}[!] PDF Generation failed: {e}{RESET}")
 
 addons = [ClientAuditor()]
