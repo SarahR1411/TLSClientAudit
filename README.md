@@ -16,7 +16,10 @@ Pour la deuxième connexion, le programme reconfigure le proxy pour refuser tout
 ### Étape 3 : Attaque Active (chiffrement RC4)
 Pour la troisième connexion, le programme force l'utilisation de RC4. Le client doit couper la connexion pour réussir le test.
 
-Une fois les trois étapes terminées, un rapport final avec une note globale (A à F) est généré.
+### Étape 4 : Attaque Active (certificat invalide)
+Pour la quatrième connexion, le programme utilise un certificat invalide pour diverses raisons possibles (date de validité dépassée, algorithme de signature obsolète — ici SHA-1 — ou nom de domaine incorrect). Le client doit refuser la connexion pour réussir ce test, ce qui démontre qu’il est capable de détecter l’invalidité du certificat.
+
+Une fois les quatre étapes terminées, un rapport final avec une note globale (A à F) est généré.
 
 ## Pourquoi tester étape par étape ?
 
@@ -51,3 +54,6 @@ mitmdump -s full_audit_tool.py
 Ensuite, connectez le téléphone au autre appareil au Wi-Fi de la Raspberry Pi (il faudra installer la CA de mitmproxy dessus pour que ça fonctionne).
 
 Note importante : Ce code n'a pas encore été testé sur la RP. Il y a de fortes chances qu'il y aura des bugs, ex : que le suivi des IP ou la gestion des délais nécessite des ajustements.
+
+## Rapport pdf
+Pour une visualisation plus simple du rapport de sécurité établi par notre outil, nous avons décidé de regrouper toutes les informations obtenues dans un document PDF. Pour cela, nous avons tout au long du programme ajouté les résultats des différentes attaques à un JSON. A la fin du programme le lancement du script report_to_pdf.py permet ensuite de transformer le json en un PDF lisible notamment grâce au template HTML qui permet de mettre en forme les informations de manière plus claire.
