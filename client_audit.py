@@ -30,6 +30,7 @@ class ClientAuditor:
         # tracks the audit step and the score at each step for each client IP, ex: {'127.0.0.1': {'step': 1, 'base_score': 'A', 'failed_attack': False} }
         self.client_state = {}
         self.unique_reports = {} # stores unique reports
+        self.sha1_blocked = False
     
     def request(self, flow : http.HTTPFlow):
         """
@@ -77,7 +78,7 @@ class ClientAuditor:
             return
 
         client_key = (client_ip, server_name) # creates a unique key for a specific connection
-        
+
         # initializes new client
         if client_key not in self.client_state:
             self.client_state[client_key] = {
@@ -100,6 +101,10 @@ class ClientAuditor:
         print("-" * 50)
         print(f"[#] CONNECTION #{step} from {client_ip} to {server_name}")
 
+        cwd = os.getcwd()
+        cert_expired = os.path.join(cwd, "bad_cert_expired.pem")
+        cert_sha1 = os.path.join(cwd, "bad_cert_sha1.pem")
+
         
         if step == 1:
             print(f"{YELLOW}[MODE] Passive Analysis & Server Audit{RESET}")
@@ -118,10 +123,27 @@ class ClientAuditor:
             # restore TLS version to allow the cipher test to run
             ctx.options.tls_version_client_max = "TLS1_2"
         elif step == 4:
-            print(f"{YELLOW}[MODE] Step 4: Serving Invalid/Expired Certificate{RESET}")
+            print(f"{YELLOW}[MODE] Step 4: Testing expired certificate{RESET}")
             ctx.options.ciphers_server = None
             ctx.options.tls_version_client_max = "TLS1_3"
-            ctx.options.certs = [f"*={BAD_CERT_FILE}"]
+            ctx.options.certs = [f"*={cert_expired}"]
+
+        elif step == 5:
+            print(f"{YELLOW}[MODE] Step 5: Testing WEAK SIGNATURE (SHA1){RESET}")
+            ctx.options.certs = [f"*={cert_sha1}"]
+
+            try:
+                with open("bad_cert_sha1.pem", "rb") as f:
+                    cert_data = f.read()
+                    cert = x509.load_pem_x509_certificate(cert_data)
+                    algo = cert.signature_algorithm_oid._name
+                    
+                    # If the file is not sha1, it means the OS replaced it
+                    if "sha1" not in algo.lower():
+                        self.sha1_blocked = True
+                        print(f"{YELLOW}[!] NOTICE: The generated cert is actually {algo}, not SHA1. Marking test as SKIPPED.{RESET}")
+            except Exception:
+                pass
 
     def tls_established_server(self, data: tls.TlsData):
         """
@@ -216,16 +238,30 @@ class ClientAuditor:
             report_attacks.append(attack_result)
         
         elif step == 4:
-            print(f"{RED}[!] FAIL: Client accepted an EXPIRED/INVALID Certificate!{RESET}")
+            print(f"{RED}[!] FAIL: Client accepted an EXPIRED certificate!{RESET}")
             print(f"    (Client does not properly validate trust chain)")
             self.client_state[client_key]['failed_attack'] = True
 
             report_attacks.append({
                 'step': 4, 
-                'attack': 'Invalid Certificate', 
-                'details': 'Client accepted bad cert', 
+                'attack': 'Expired Cert', 
+                'details': 'Client accepted expired cert', 
                 'success': True
             })
+        
+        elif step == 5:
+            if self.sha1_blocked:
+                print(f"{YELLOW}[-] SKIPPING Step 5: SHA1 not supported by host OS.{RESET}")
+                report_attacks.append({
+                    'step': 5, 
+                    'attack': 'Weak Sig (SHA1)', 
+                    'details': 'SKIPPED (Host OS blocked SHA1 gen)', 
+                    'success': False 
+                })
+            else : 
+                print(f"{RED}[!] FAIL: Client accepted SHA1 Signature!{RESET}")
+                self.client_state[client_key]['failed_attack'] = True
+                report_attacks.append({'step': 5, 'attack': 'Weak Sig (SHA1)', 'details': 'Client accepted SHA1', 'success': True})
 
         # prepare for next step
         self.advance_step(client_key)
@@ -258,8 +294,15 @@ class ClientAuditor:
             report_attacks.append({'step': 3, 'attack': 'Weak Cipher', 'details': 'Blocked by client', 'success': False})
         
         elif step == 4:
-            print(f"{GREEN}[V] SUCCESS: Client blocked Invalid Certificate.{RESET}")
-            report_attacks.append({'step': 4, 'attack': 'Invalid Certificate', 'details': 'Blocked by client', 'success': False})
+            print(f"{GREEN}[V] SUCCESS: Client blocked expired certificate.{RESET}")
+            report_attacks.append({'step': 4, 'attack': 'Expired Cert', 'details': 'Blocked by client', 'success': False})
+
+        elif step == 5:
+            if self.sha1_blocked:
+                report_attacks.append({'step': 5, 'attack': 'Weak Sig (SHA1)', 'details': 'SKIPPED (Host OS blocked SHA1 gen)', 'success': False})
+            else:
+                print(f"{GREEN}[V] SUCCESS: Client blocked SHA1 Signature.{RESET}")
+                report_attacks.append({'step': 5, 'attack': 'Weak Sig (SHA1)', 'details': 'Blocked by client', 'success': False})
 
         # prepare for next step
         self.advance_step(client_key)
@@ -275,7 +318,7 @@ class ClientAuditor:
         
         current_step = self.client_state[client_key]['step']
 
-        if current_step == 4:
+        if current_step == 5:
             # retrieves the saved score from step 1
             base = self.client_state[client_key]['base_score']
 
@@ -437,28 +480,101 @@ class ClientAuditor:
         
         return score
     def generate_bad_cert(self):
-        """Generates a self-signed certificate that expired recently (2 days ago)"""
-        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, u"bad-cert.test")])
+        """
+        Generates a self-signed certificate with incorrect elements
+        """
+
+        ca_path = os.path.expanduser(ctx.options.confdir)
+        ca_key_file = os.path.join(ca_path, "mitmproxy-ca.pem")      # Contains Private Key
+        ca_cert_file = os.path.join(ca_path, "mitmproxy-ca-cert.pem") # Contains Public Cert
+
+        print(f"{BLUE}[*] Loading Mitmproxy CA from: {ca_path}{RESET}")
+
+        try:
+            # Load the CA Private Key
+            with open(ca_key_file, "rb") as f:
+                ca_key = serialization.load_pem_private_key(f.read(), password=None)
+            
+            # Load the CA Certificate
+            with open(ca_cert_file, "rb") as f:
+                ca_cert = x509.load_pem_x509_certificate(f.read())
+                
+            issuer_name = ca_cert.subject 
+            print(f"{GREEN}[V] Successfully loaded Mitmproxy CA keys.{RESET}")
         
-        cert = x509.CertificateBuilder().subject_name(subject).issuer_name(issuer).public_key(
-            key.public_key()
+        except Exception as e:
+            print(f"{RED}[!] CRITICAL: Could not load Mitmproxy CA keys ({e}). Falling back to self-signed.{RESET}")
+            ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            issuer_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, u"mitmproxy")])
+
+        # --- GENERATE THE BAD CERTS ---
+        server_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, u"bad-cert.test")])
+        
+        #expired certificate
+        cert_expired = x509.CertificateBuilder().subject_name(subject).issuer_name(issuer_name).public_key(
+            server_key.public_key()
         ).serial_number(x509.random_serial_number()).not_valid_before(
             datetime.datetime.utcnow() - datetime.timedelta(days=92)
         ).not_valid_after(
             datetime.datetime.utcnow() - datetime.timedelta(days=2)
         ).add_extension(
-            x509.BasicConstraints(ca=True, path_length=None), critical=True,
-        ).sign(key, hashes.SHA256())
+            x509.BasicConstraints(ca=False, path_length=None), critical=True,
+        ).sign(ca_key, hashes.SHA256())
 
-        with open(BAD_CERT_FILE, "wb") as f:
-            f.write(cert.public_bytes(serialization.Encoding.PEM))
-            f.write(key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.TraditionalOpenSSL,
-                encryption_algorithm=serialization.NoEncryption()
-            ))
-        print(f"{BLUE}[*] Generated temporary bad certificate: {BAD_CERT_FILE}{RESET}")
+        # Weak signature (SHA1)
+        cert_sha1_builder = x509.CertificateBuilder().subject_name(subject).issuer_name(issuer_name).public_key(
+            server_key.public_key()
+        ).serial_number(x509.random_serial_number()).not_valid_before(
+            datetime.datetime.utcnow()
+        ).not_valid_after(
+            datetime.datetime.utcnow() + datetime.timedelta(days=360)
+        ).add_extension(
+            x509.BasicConstraints(ca=False, path_length=None), critical=True,
+        )
+
+        try:
+            cert_sha1 = cert_sha1_builder.sign(ca_key, hashes.SHA1()) # Try SHA1
+        except Exception:
+            print(f"{YELLOW}[!] SYSTEM ALERT: SHA1 generation blocked by OS. Skipping Step 5.{RESET}")
+            self.sha1_blocked = True
+            cert_sha1 = cert_sha1_builder.sign(ca_key, hashes.SHA256())
+
+        def write_pem(filename, cert_obj):
+            with open(filename, "wb") as f:
+                f.write(server_key.private_bytes(
+                    encoding=serialization.Encoding.PEM, 
+                    format=serialization.PrivateFormat.TraditionalOpenSSL, 
+                    encryption_algorithm=serialization.NoEncryption()
+                ))
+                f.write(cert_obj.public_bytes(serialization.Encoding.PEM))
+
+        write_pem("bad_cert_expired.pem", cert_expired)
+        write_pem("bad_cert_sha1.pem", cert_sha1)
+        
+        print(f"{BLUE}[*] Bad Certificates Generated (Signed by Mitmproxy CA).{RESET}")
+                
+
+        try:
+            #load template
+            env = Environment(loader=FileSystemLoader("."))
+            template = env.get_template(TEMPLATE_FILE)
+
+            #convert dict values to a list and pass it as 'reports' 
+            all_reports_list = list(self.unique_reports.values())
+            
+            #render HTML with the list of reports
+            html_content = template.render(reports=all_reports_list)
+
+            output_pdf = "GLOBAL_CLIENT_AUDIT_REPORT.pdf"
+            
+            # write PDF
+            HTML(string=html_content).write_pdf(output_pdf)
+            print(f"{GREEN}[SUCCESS] Report generated: {output_pdf}{RESET}")
+
+        except Exception as e:
+            print(f"{RED}[!] PDF Generation Failed: {e}{RESET}")
+
     def done(self):
         """
         Triggered when Ctrl+C is pressed

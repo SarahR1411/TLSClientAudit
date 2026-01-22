@@ -10,6 +10,7 @@
         .header-block { background-color: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 5px solid #2c3e50; }
         .good { color: green; font-weight: bold; }
         .bad { color: red; font-weight: bold; }
+        .warn { color: orange; font-weight: bold; }
         table { border-collapse: collapse; width: 100%; margin-top: 15px; margin-bottom: 30px;}
         th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
         th { background-color: #f2f2f2; }
@@ -65,7 +66,9 @@
             <td>{{ attack.attack }}</td>
             <td>{{ attack.details }}</td>
             <td>
-                {% if attack.success %}
+                {% if 'SKIPPED' in attack.details %}
+                    <span class="warn">SKIPPED</span>
+                {% elif attack.success %}
                     <span class="bad">VULNERABLE</span>
                 {% else %}
                     <span class="good">BLOCKED</span>
