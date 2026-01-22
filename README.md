@@ -72,6 +72,12 @@ Pour la cinquième connexion, nous tentons de présenter un certificat signé av
 
 ## Mode d'emploi
 
+Avant d'utiliser l'outil, installez les dépendances Python nécessaires :
+
+```bash
+pip install -r requirements.txt
+```
+
 ### 1. Validation et test en environnement local
 
 Le script `run_full_test.sh` permet de vérifier le bon fonctionnement de l'outil en local.
