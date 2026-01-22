@@ -14,6 +14,16 @@
         table { border-collapse: collapse; width: 100%; margin-top: 15px; margin-bottom: 30px;}
         th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
         th { background-color: #f2f2f2; }
+        .grade-A { color: green; font-weight: bold; }
+        .grade-B { color: #FFA500; font-weight: bold; }
+        .grade-C { color: orange; font-weight: bold; }
+        .grade-F { 
+            color: red; 
+            font-weight: bold; 
+            background: #ffe6e6; 
+            padding: 2px 8px; 
+            border-radius: 4px; 
+    }
     </style>
 </head>
 <body>
@@ -29,17 +39,21 @@
         <p><b>Client IP:</b> {{ report.client_ip }}</p>
         <p><b>Timestamp:</b> {{ report.timestamp }}</p>
         <p><b>Final Grade:</b> 
-           <span class="{{ 'bad' if report.final_grade == 'F' else 'good' }}">
-               {{ report.final_grade }}
-           </span>
-        </p>
+        <span class="grade-{{ report.final_grade }}">{{ report.final_grade }}</span>
+        
+        {% if report.final_grade == 'F' %}
+        <span style="color: red; font-size: 0.9em; margin-left: 5px;"> (CRITICAL)</span>
+        {% elif report.final_grade == 'C' %}
+        <span style="color: orange; font-size: 0.9em; margin-left: 5px;"> (WARNING)</span>
+        {% elif report.final_grade == 'B' %}
+        <span style="color: #FFA500; font-size: 0.9em; margin-left: 5px;"> (MODERATE)</span>
+        {% endif %}
     </div>
 
     <h3>1. Passive Analysis</h3>
     <ul>
         <li>SNI: {{ report.passive.sni }}</li>
         <li>Ciphers offered: {{ report.passive.cipher_count }}</li>
-        <li>SCSV supported: {{ report.passive.scsv_supported }}</li>
         <li>Weak ciphers offered: {{ report.passive.offered_weak_ciphers | length }}</li>
     </ul>
 
@@ -77,9 +91,60 @@
         </tr>
         {% endfor %}
     </table>
+    <p><strong>Test Coverage:</strong> 
+        {% set completed = report.attacks|length %}
+        {% set total = 5 %}
+        {% set percentage = (completed / total * 100)|int %}
+        
+        {% if percentage == 100 %}
+            <span style="color: green; font-weight: bold;">✓ Complete (100%)</span>
+        {% elif percentage >= 80 %}
+            <span style="color: #FFA500; font-weight: bold;">{{ percentage }}% ({{ 5-completed }} test(s) skipped)</span>
+        {% else %}
+            <span style="color: red; font-weight: bold;">{{ percentage }}% (INCOMPLETE)</span>
+        {% endif %}
+        </p>
     <hr>
 </div>
 
 {% endfor %} 
+
+<div style="page-break-before: always; background: #f0f8ff; padding: 20px; border-radius: 5px; border-left: 5px solid #2c3e50; margin-bottom: 30px;">
+  <h3>Executive Summary</h3>
+  <p><strong>Total Connections Audited:</strong> {{ reports|length }}</p>
+  <p><strong>Average Grade:</strong> 
+    {% set grade_points = {'A': 4, 'B': 3, 'C': 2, 'F': 0} %}
+    {% set total_score = 0 %}
+    {% for report in reports %}
+      {% if report.final_grade in grade_points %}
+        {% set total_score = total_score + grade_points[report.final_grade] %}
+      {% endif %}
+    {% endfor %}
+    {% if reports|length > 0 %}
+      {{ (total_score / reports|length)|round(1) }}
+    {% else %}
+      N/A
+    {% endif %}
+  </p>
+  <p><strong>Most Common Vulnerability:</strong> 
+    {% set vuln_counter = {'TLS Downgrade': 0, 'Weak Cipher': 0, 'Expired Cert': 0, 'Weak Sig (SHA1)': 0} %}
+    {% for report in reports %}
+      {% for attack in report.attacks %}
+        {% if attack.success %}
+          {% if attack.attack in vuln_counter %}
+            {% set vuln_counter = vuln_counter.update({attack.attack: vuln_counter[attack.attack] + 1}) or vuln_counter %}
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+    {% endfor %}
+    {% set top_vuln = vuln_counter|dictsort(by='value')|last %}
+    {% if top_vuln[1] > 0 %}
+      {{ top_vuln[0] }} ({{ top_vuln[1] }} occurrence(s))
+    {% else %}
+      None detected
+    {% endif %}
+  </p>
+</div>
+
 </body>
 </html>
