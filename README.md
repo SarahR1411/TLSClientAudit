@@ -14,7 +14,7 @@ Lors de la première connexion, le script laisse passer le trafic normalement po
 Pour la deuxième connexion, le programme reconfigure le proxy pour refuser tout protocole moderne et ne propose que TLS 1.0. Si le client accepte de se connecter, c'est considéré comme un échec.
 
 ### Étape 3 : Attaque Active (chiffrement RC4)
-Pour la troisième connexion, le programme force l'utilisation de la suite cryptographique la plus faible proposée par le client. Si le client accepte la connexion avec une suite qualifiée "insecure", il réussit le test.
+Pour la troisième connexion, le programme force l'utilisation de la suite cryptographique la plus faible proposée par le client. Si le client accepte la connexion avec une suite qualifiée "insecure", il échoue le test, sinon, il réussit.
 
 Une fois les trois étapes terminées, un rapport final avec une note globale (A à F) est généré.
 
