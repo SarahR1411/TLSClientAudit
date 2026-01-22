@@ -20,7 +20,6 @@ BOLD = "\033[1m"
 # audit Lists
 WEAK_CIPHER_KEYWORDS = ["_RC4_", "_MD5_", "_DES_", "_NULL_", "_EXPORT_", "_CBC_", "-SHA", "_SHA"] # to replace with db that updates automatically if possible 
 DEPRECATED_VERSIONS = ["SSLv2", "SSLv3", "TLSv1", "TLSv1.1"] 
-SCSV_CIPHER_CODE = 0x5600 
 
 BAD_CERT_FILE = "temp_bad_cert.pem"
 TEMPLATE_FILE = "report_template.html"
@@ -73,6 +72,8 @@ class ClientAuditor:
         """
         client_ip = data.context.client.peername[0]
         server_name = data.client_hello.sni or "unknown_target"
+        if server_name == "unknown_target":
+            print(f"{YELLOW}[!] WARNING: No SNI provided by client{RESET}")
 
         if "mitm.it" in server_name:
             return
@@ -116,6 +117,7 @@ class ClientAuditor:
         elif step == 2:
             print(f"{YELLOW}[MODE] Active Attack - Forcing TLS 1.0{RESET}")
             ctx.options.tls_version_client_max = "TLS1" 
+            ctx.options.tls_version_client_min = "TLS1"
 
         elif step == 3:
             print(f"{YELLOW}[MODE] Active Attack - Forcing Weak Ciphers (AES-CBC){RESET}")
@@ -349,6 +351,7 @@ class ClientAuditor:
         # resets the global proxy settings back to default
         ctx.options.ciphers_server = None
         ctx.options.tls_version_client_max = "TLS1_3"
+        ctx.options.tls_version_client_min = "TLS1"
         ctx.options.certs = []
 
     def audit_passive(self, data):
@@ -363,12 +366,6 @@ class ClientAuditor:
         
         print(f" [*] SNI (Target Domain): {sni}")
         print(f" [*] Ciphers Offered: {len(ciphers)} suites")
-        
-        # SCSV Check
-        if SCSV_CIPHER_CODE in ciphers:
-            print(f" [*] Downgrade Defense (SCSV): {GREEN}DETECTED (Good){RESET}")
-        else:
-            print(f" [*] Downgrade Defense (SCSV): {YELLOW}MISSING (Warning){RESET}")
 
         weak = [str(c) for c in ciphers if any(k in str(c) for k in WEAK_CIPHER_KEYWORDS)]
         if weak:
@@ -379,7 +376,6 @@ class ClientAuditor:
                 'sni': sni,
                 'cipher_count': len(ciphers),
                 'offered_weak_ciphers': weak,
-                'scsv_supported': SCSV_CIPHER_CODE in ciphers
             }
 
     def audit_server_certificate(self, data):
@@ -408,6 +404,7 @@ class ClientAuditor:
             
 
             if isinstance(pub_key, rsa.RSAPublicKey):
+                 # 1024-bit RSA is deprecated by NIST since 2015
                 if bits < 2048:
                     print(f" |— {RED}[!] CLIENT FAILURE: Weak RSA Key ({bits} bits).{RESET}")
                 else:
@@ -562,10 +559,16 @@ class ClientAuditor:
         It takes all the stored reports and generates one PDF.
         """
         print(f"\n{BLUE}[*] STOPPING AUDIT... Generating global report...{RESET}")
-        
+
+        for client_key, state in self.client_state.items():
+            if 'report' in state and state['report']:
+                print(f"{YELLOW}[!] Including partial audit for {client_key}{RESET}")
+                state['report']['final_grade'] = "INCOMPLETE"
+                self.unique_reports[client_key] = state['report']
+            
         if not self.unique_reports:
-            print(f"{YELLOW}[!] No completed audits to report.{RESET}")
-            return
+                print(f"{YELLOW}[!] No audits to report.{RESET}")
+                return
 
         try:
             #load template
