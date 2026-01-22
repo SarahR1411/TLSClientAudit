@@ -5,7 +5,9 @@
     <title>Global TLS Audit Report</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 40px; }
-        .page-break { page-break-after: always; } 
+        .page-break { 
+            page-break-after: auto;       
+        }
         h1, h2 { color: #2c3e50; }
         .header-block { background-color: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 5px solid #2c3e50; }
         .good { color: green; font-weight: bold; }
@@ -54,7 +56,29 @@
     <ul>
         <li>SNI: {{ report.passive.sni }}</li>
         <li>Ciphers offered: {{ report.passive.cipher_count }}</li>
-        <li>Weak ciphers offered: {{ report.passive.offered_weak_ciphers | length }}</li>
+        <li>Weak ciphers offered: 
+            {% if report.passive.offered_weak_ciphers %}
+                <span class="bad">{{ report.passive.offered_weak_ciphers | length }}</span>
+                <div style="background: #fff0f0; border: 1px solid #ffcccc; padding: 10px; margin-top: 5px; margin-bottom: 10px; font-size: 0.85em; color: #a00; border-radius: 4px;">
+                    <strong>List of Weak Suites:</strong><br>
+                    <div style="margin-top:5px; column-count: 1; column-gap: 20px;">
+                    {% for cipher in report.passive.offered_weak_ciphers %}
+                        <div style="margin-bottom: 2px;">• {{ cipher }}</div>
+                    {% endfor %}
+                    </div>
+                </div>
+            {% else %}
+                <span class="good">0</span>
+            {% endif %}
+        </li>
+        <li>Forward Secrecy (PFS): 
+            <span class="{{ 'good' if 'YES' == report.negotiated.pfs else 'bad' }}">
+                {{ report.negotiated.pfs }}
+            </span>
+        </li>
+        <li>Authenticated Encryption (AEAD): 
+            <span class="{{ 'good' if 'YES' == report.negotiated.aead else 'warn' }}">
+                {{ report.negotiated.aead }}
     </ul>
 
     <h3>2. Certificate Analysis</h3>
@@ -109,7 +133,7 @@
 
 {% endfor %} 
 
-<div style="page-break-before: always; background: #f0f8ff; padding: 20px; border-radius: 5px; border-left: 5px solid #2c3e50; margin-bottom: 30px;">
+<div style="background: #f0f8ff; padding: 20px; border-radius: 5px; border-left: 5px solid #2c3e50; margin-bottom: 30px;">
   <h3>Executive Summary</h3>
   <p><strong>Total Connections Audited:</strong> {{ reports|length }}</p>
   <p><strong>Average Grade:</strong> 
