@@ -552,6 +552,25 @@ class ClientAuditor:
         print(f"{BLUE}[*] Bad Certificates Generated (Signed by Mitmproxy CA).{RESET}")
                 
 
+        try:
+            #load template
+            env = Environment(loader=FileSystemLoader("."))
+            template = env.get_template(TEMPLATE_FILE)
+
+            #convert dict values to a list and pass it as 'reports' 
+            all_reports_list = list(self.unique_reports.values())
+            
+            #render HTML with the list of reports
+            html_content = template.render(reports=all_reports_list)
+
+            output_pdf = "GLOBAL_CLIENT_AUDIT_REPORT.pdf"
+            
+            # write PDF
+            HTML(string=html_content).write_pdf(output_pdf)
+            print(f"{GREEN}[SUCCESS] Report generated: {output_pdf}{RESET}")
+
+        except Exception as e:
+            print(f"{RED}[!] PDF Generation Failed: {e}{RESET}")
 
     def done(self):
         """
