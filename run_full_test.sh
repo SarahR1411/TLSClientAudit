@@ -36,9 +36,9 @@ echo ""
 echo ">>> Triggering connection 4 (Bad Certificate Test)..."
 curl --proxy http://127.0.0.1:8080 --cacert ~/.mitmproxy/mitmproxy-ca-cert.pem https://www.example.com -s -o /dev/null
 
-echo ""
-echo ">>> Triggering connection 4 (Bad Certificate Test)..."
-curl --proxy http://127.0.0.1:8080 https://www.example.com -k -s -o /dev/null
+#echo ""
+#echo ">>> Triggering connection 4 (Bad Certificate Test)..."
+#curl --proxy http://127.0.0.1:8080 https://www.example.com -k -s -o /dev/null
 
 # cleanup (stops the tool)
 kill $MITM_PID

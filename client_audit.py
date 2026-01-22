@@ -38,6 +38,7 @@ class ClientAuditor:
     def __init__(self):
         # tracks the audit step and the score at each step for each client IP, ex: {'127.0.0.1': {'step': 1, 'base_score': 'A', 'failed_attack': False} }
         self.client_state = {}
+        self.cipher_map = self.load_iana_cipher()
     
     def request(self, flow : http.HTTPFlow):
         """
@@ -117,19 +118,7 @@ class ClientAuditor:
             if chosen:
                 print(f"{RED}[!] Forcing weakest available cipher: {chosen} ({security}){RESET}")
 
-            # OpenSSL naming conversion (suffisant pour RSA/CBC)
-                openssl_name = (
-                    chosen.replace("TLS_", "")
-                        .replace("_WITH_", "-")
-                        .replace("_", "-")
-                )
-                print("babababababa   :::   ",openssl_name)
-
-                ctx.options.ciphers_server = openssl_name
-            
-            #print(f"{BLUE}[*] Client offered cipher suite IDs:{RESET}")
-            #for cs in data.client_hello.cipher_suites:
-            #    print("   ", hex(cs))
+                ctx.options.ciphers_server = chosen
 
             
             else:
@@ -146,7 +135,7 @@ class ClientAuditor:
         """
         Queries ciphersuite.info API and returns security level
         """
-        print("nom de la cipher : ",cipher_name)
+
         try:
             url = f"{CIPHERSUITE_API}{cipher_name}/"
             r = requests.get(url, timeout=2)
@@ -173,6 +162,30 @@ class ClientAuditor:
         classified = []
         cipher_list = []
         
+        
+        
+
+        for suite in cipher_list_id :
+            cipher_name = self.cipher_map.get(suite)
+            if cipher_name:
+                cipher_list.append(cipher_name)
+
+        for cipher in cipher_list:
+            security = self.query_ciphersuite_info(cipher)
+            if security:
+                classified.append((cipher, security))
+            print("nom de la cipher : ",cipher, " / niveau de sécurité : ", security)
+
+        if not classified:
+            return None, None
+
+        classified.sort(key=lambda x: SECURITY_PRIORITY.get(x[1], 99))
+        
+        return classified[0]  # (cipher_name, security)
+    
+    
+    def load_iana_cipher(self):
+        
         url = "https://www.iana.org/assignments/tls-parameters/tls-parameters-4.csv"
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -196,29 +209,8 @@ class ClientAuditor:
             except Exception:
                 continue
         
-        #cipher_id_to_name = load_iana_cipher()
-        for suite in cipher_list_id :
-            cipher_name = cipher_map.get(suite)
-            if cipher_name:
-                cipher_list.append(cipher_name)
-
-        for cipher in cipher_list:
-            security = self.query_ciphersuite_info(cipher)
-            if security:
-                classified.append((cipher, security))
-
-        if not classified:
-            return None, None
-
-        classified.sort(key=lambda x: SECURITY_PRIORITY.get(x[1], 99))
-        
-        return classified[0]  # (cipher_name, security)
-    
-    
-    #def load_iana_cipher(self):
-        
-
-        #return cipher_map
+        print(f"[+] Loaded {len(cipher_map)} cipher suites from IANA")
+        return cipher_map
 
 
     def tls_established_server(self, data: tls.TlsData):
