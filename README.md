@@ -1,6 +1,6 @@
 ## Fonctionnement du script
 
-Il fonctionne comme une machine à états qui force chaque client (identifié par son IP) à passer une série de 3 tests séquentiels.
+Ce script fonctionne comme une machine à états qui force chaque client (identifié par son IP) à passer une série de 5 tests séquentiels.
 
 ### Étape 1 : Analyse Passive (baseline)
 Lors de la première connexion, le script laisse passer le trafic normalement pour établir un profil de sécurité. Il vérifie plusieurs points :
