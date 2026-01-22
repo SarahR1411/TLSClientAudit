@@ -1,6 +1,6 @@
 ## Fonctionnement du script
 
-Il fonctionne comme une machine à états qui force chaque client (identifié par son IP) à passer une série de 3 tests séquentiels.
+Ce script fonctionne comme une machine à états qui force chaque client (identifié par son IP) à passer une série de 5 tests séquentiels.
 
 ### Étape 1 : Analyse Passive (baseline)
 Lors de la première connexion, le script laisse passer le trafic normalement pour établir un profil de sécurité. Il vérifie plusieurs points :
@@ -14,7 +14,7 @@ Lors de la première connexion, le script laisse passer le trafic normalement po
 Pour la deuxième connexion, le programme reconfigure le proxy pour refuser tout protocole moderne et ne propose que TLS 1.0. Si le client accepte de se connecter, c'est considéré comme un échec.
 
 ### Étape 3 : Attaque Active (chiffrement RC4)
-Pour la troisième connexion, le programme force l'utilisation de RC4. Le client doit couper la connexion pour réussir le test.
+Pour la troisième connexion, le programme force l'utilisation de la suite cryptographique la plus faible proposée par le client. Si le client accepte la connexion avec une suite qualifiée "insecure", il réussit le test.
 
 Une fois les trois étapes terminées, un rapport final avec une note globale (A à F) est généré.
 

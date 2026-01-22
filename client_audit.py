@@ -109,6 +109,7 @@ class ClientAuditor:
 
         elif step == 3:
             print(f"{YELLOW}[MODE] Active Attack - Choosing weakest cipher (API-based){RESET}")
+            ctx.options.tls_version_client_min = "TLS1"
             ctx.options.tls_version_client_max = "TLS1_2"
 
             client_ciphers = list(data.client_hello.cipher_suites)
@@ -118,7 +119,15 @@ class ClientAuditor:
             if chosen:
                 print(f"{RED}[!] Forcing weakest available cipher: {chosen} ({security}){RESET}")
 
+                #ctx.options.ciphers_server = chosen
+                
+                self.client_state[client_key]['forced_cipher'] = chosen
+                self.client_state[client_key]['forced_security'] = security
+
+                print(f"{RED}[!] Forcing weakest available cipher: {chosen} ({security}){RESET}")
                 ctx.options.ciphers_server = chosen
+                ctx.options.ciphers_client = chosen
+
 
             
             else:
@@ -271,15 +280,23 @@ class ClientAuditor:
         elif step == 3:
 
             cipher_used = str(data.conn.cipher)
-            is_secure_aead = "GCM" in cipher_used or "POLY1305" in cipher_used
 
-            if not is_secure_aead:
-                print(f"{RED}[!] FAIL: Client accepted WEAK CIPHER ({cipher_used})!{RESET}")
-                print(f"    (Client did not enforce secure cipher suite)")
+            forced_cipher = self.client_state[client_key].get('forced_cipher')
+            forced_security = self.client_state[client_key].get('forced_security')
+
+            print(f"    Forced cipher: {forced_cipher} ({forced_security})")
+            print(f"    Negotiated cipher: {cipher_used}")
+
+            if cipher_used == forced_cipher and forced_security in ["insecure", "weak"]:
+                level = "INSECURE" if forced_security == "insecure" else "WEAK"
+                color = RED if forced_security == "insecure" else YELLOW
+
+                print(f"{color}[!] FAIL: Client accepted {level} weakest cipher{RESET}")
                 self.client_state[client_key]['failed_attack'] = True
             else:
-                print(f"{GREEN}[V] OK: ATTACK FAILED - Connection succeeded with STRONG cipher ({cipher_used}){RESET}")
-                print(f"    (Client enforced secure cipher suite)")
+                print(f"{GREEN}[V] OK: Client did not accept a weak/insecure cipher{RESET}")
+
+
         
         elif step == 4:
             print(f"{RED}[!] FAIL: Client accepted an EXPIRED/INVALID Certificate!{RESET}")
