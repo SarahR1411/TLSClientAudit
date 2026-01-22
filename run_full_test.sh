@@ -55,6 +55,9 @@ echo ""
 echo ">>> Triggering connection 5 (SHA1 Certificate Test)..."
 curl --proxy http://127.0.0.1:8080 --cacert ~/.mitmproxy/mitmproxy-ca-cert.pem https://www.wikipedia.com -s -o /dev/null
 
+
+
+
 # cleanup (stops the tool)
 kill $MITM_PID
 wait $MITM_PID 2>/dev/null
