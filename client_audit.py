@@ -231,8 +231,9 @@ class ClientAuditor:
         print(f"[+] HANDSHAKE COMPLETED: {client_ip} -> {server_name}")
 
         if step == 1:
-            score = self.analyze_connection_quality(data) # calculates 'C' but stores it for later
+            score, details = self.analyze_connection_quality(data) # calculates 'C' but stores it for later
             self.client_state[client_key]['base_score'] = score
+            self.client_state[client_key]['report']['negotiated'] = details
             print(f"{GREEN}[V] Baseline data captured.{RESET}")
 
         elif step == 2:
@@ -544,16 +545,25 @@ class ClientAuditor:
         print(f"{BOLD} [*] Negotiated Parameters Analysis:{RESET}")
         
         # PFS CHECK
+        pfs_status = "UNKNOWN"
         if "ECDHE" in cipher_name or "DHE" in cipher_name:
+             pfs_status = "YES"
              print(f"     |— Forward Secrecy (PFS): {GREEN}YES{RESET}")
         else:
+             pfs_status = "NO (Risk: No Session Keys)"
              print(f"     |— Forward Secrecy (PFS): {RED}NO (Risk: No Session Keys){RESET}")
 
         # AEAD CHECK
+        aead_status = "UNKNOWN"
         if "GCM" in cipher_name or "POLY1305" in cipher_name:
-            print(f"     |— Authenticated Encryption (AEAD): {GREEN}YES{RESET}")
+            aead_status = "YES"
+            print(f"     |— Authenticated Encryption (AEAD): {GREEN}{aead_status}{RESET}")
         elif "CBC" in cipher_name:
-            print(f"     |— Authenticated Encryption (AEAD): {YELLOW}NO (CBC Mode){RESET}")
+            aead_status = "NO (CBC Mode)"
+            print(f"     |— Authenticated Encryption (AEAD): {RED}{aead_status}{RESET}")
+        else:
+            aead_status = "NO"
+            print(f"     |— Authenticated Encryption (AEAD): {RED}{aead_status}{RESET}")
         
         # internal grading (it's hidden from the user for now)
         score = "A"
@@ -562,7 +572,7 @@ class ClientAuditor:
         if "ECDHE" not in cipher_name: score = "C"
         if "RC4" in cipher_name or "MD5" in cipher_name: score = "F"
         
-        return score
+        return score, {'pfs': pfs_status, 'aead': aead_status}
     def generate_bad_cert(self):
         """
         Generates a self-signed certificate with incorrect elements
