@@ -7,6 +7,9 @@ from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
+import requests
+import csv
+import io
 
 
 # for changing the colors in the terminal
@@ -18,8 +21,10 @@ BLUE = "\033[94m"
 BOLD = "\033[1m"
 
 # audit Lists
-WEAK_CIPHER_KEYWORDS = ["_RC4_", "_MD5_", "_DES_", "_NULL_", "_EXPORT_", "_CBC_", "-SHA", "_SHA"] # to replace with db that updates automatically if possible 
+WEAK_CIPHER_KEYWORDS = ["_RC4_", "_MD5_", "_DES_", "_NULL_", "_EXPORT_", "_CBC_", "-SHA", "_SHA"]
 DEPRECATED_VERSIONS = ["SSLv2", "SSLv3", "TLSv1", "TLSv1.1"] 
+
+CIPHERSUITE_API = "https://ciphersuite.info/api/cs/"
 
 BAD_CERT_FILE = "temp_bad_cert.pem"
 TEMPLATE_FILE = "report_template.html"
@@ -30,6 +35,45 @@ class ClientAuditor:
         self.client_state = {}
         self.unique_reports = {} # stores unique reports
         self.sha1_blocked = False
+        self.cipher_map = self.load_iana_cipher()
+        self.api_cache = {} # Stores API results so we don't call it twice
+    
+    def load_iana_cipher(self):
+        print(f"{BLUE}[*] Downloading IANA Cipher Registry...{RESET}")
+        try:
+            url = "https://www.iana.org/assignments/tls-parameters/tls-parameters-4.csv"
+            response = requests.get(url, timeout=5)
+            if response.status_code != 200: return {}
+            
+            reader = csv.DictReader(io.StringIO(response.text))
+            cipher_map = {}
+
+            for row in reader:
+                value = row.get("Value")
+                name = row.get("Description")
+                if not value or not name: continue
+                try:
+                    b1,b2 = value.split(",")
+                    cipher_id = (int(b1, 16) << 8) | int(b2, 16)
+                    cipher_map[cipher_id] = name
+                except Exception:
+                    continue
+            
+            print(f"{GREEN}[+] Loaded {len(cipher_map)} cipher suites from IANA{RESET}")
+            return cipher_map
+        except Exception as e:
+            print(f"{YELLOW}[!] Failed to load IANA ciphers: {e}{RESET}")
+            return {}
+
+    def query_ciphersuite_info(self, cipher_name):
+        try:
+            url = f"{CIPHERSUITE_API}{cipher_name}/"
+            r = requests.get(url, timeout=1) 
+            if r.status_code != 200: return None
+            data = r.json()
+            return data.get(cipher_name, {}).get("security")
+        except:
+            return None
     
     def request(self, flow : http.HTTPFlow):
         """
@@ -353,6 +397,28 @@ class ClientAuditor:
         ctx.options.tls_version_client_max = "TLS1_3"
         ctx.options.tls_version_client_min = "TLS1"
         ctx.options.certs = []
+    
+    def get_cipher_security(self, cipher_name):
+        """
+        Checks cache first then API. Returns 'weak', 'secure', etc.
+        """
+        if cipher_name in self.api_cache:
+            return self.api_cache[cipher_name]
+
+        try:
+            url = f"{CIPHERSUITE_API}{cipher_name}/"
+            r = requests.get(url, timeout=1) 
+            if r.status_code == 200:
+                data = r.json()
+                security = data.get(cipher_name, {}).get("security")
+                
+                #save to cache
+                self.api_cache[cipher_name] = security
+                return security
+        except Exception:
+            pass
+        
+        return "unknown"
 
     def audit_passive(self, data):
         """
@@ -367,15 +433,36 @@ class ClientAuditor:
         print(f" [*] SNI (Target Domain): {sni}")
         print(f" [*] Ciphers Offered: {len(ciphers)} suites")
 
-        weak = [str(c) for c in ciphers if any(k in str(c) for k in WEAK_CIPHER_KEYWORDS)]
-        if weak:
-            print(f"  {RED}[!] AUDIT ALERT:{RESET} Client offered {len(weak)} weak ciphers (Passive)")
+        weak_ciphers_found = []
+        
+        # only prints this log if cache is empty (first run)
+        if not self.api_cache:
+            print(f" [*] Analyzing ciphers against API (First run only)...")
+
+        for cipher_id in ciphers:
+            cipher_name = self.cipher_map.get(cipher_id)
+            
+            if cipher_name:
+                #check security (cached API lookup)
+                security = self.get_cipher_security(cipher_name)
+                
+                if security in ["weak", "insecure"]:
+                     weak_ciphers_found.append(f"{cipher_name} ({security})")
+            else:
+                # fallback: Manual keyword check for unknown IDs
+                if any(k in str(cipher_id) for k in WEAK_CIPHER_KEYWORDS):
+                    weak_ciphers_found.append(str(cipher_id))
+
+        if weak_ciphers_found:
+            print(f"  {RED}[!] AUDIT ALERT:{RESET} Client offered {len(weak_ciphers_found)} weak ciphers!")
+            for w in weak_ciphers_found:
+                print(f"      - {w}")
         
         if client_key in self.client_state:
             self.client_state[client_key]['report']['passive'] = {
                 'sni': sni,
                 'cipher_count': len(ciphers),
-                'offered_weak_ciphers': weak,
+                'offered_weak_ciphers': weak_ciphers_found,
             }
 
     def audit_server_certificate(self, data):
