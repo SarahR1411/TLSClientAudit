@@ -1,56 +1,58 @@
 #!/bin/bash
 
-TARGET_HOST="google.com"
-TARGET_PORT="443"
+# ==========================================================
+# Script de test SSL/TLS via openssl_custom_testssl
+# Usage: ./test_client.sh <addr_ip> <port>
+# ==========================================================
+
+if [ $# -ne 2 ]; then
+    echo "Usage: $0 <addr_ip> <port>"
+    exit 1
+fi
+
+TARGET_IP="$1"
+TARGET_PORT="$2"
+
+echo "=============================================="
+echo "              Client TLS/SSL"
+echo "=============================================="
+echo ""
+echo "Adresse cible : $TARGET_IP"
+echo "Port          : $TARGET_PORT"
+echo ""
 
 OPENSSL_BIN="./openssl_custom_testssl"
 CUSTOM_CLIENT="./custom_client"
 
-if [ ! -x "$OPENSSL_BIN" ] || [ ! -x "$CUSTOM_CLIENT" ]; then
-    echo "Erreur : binaires requis introuvables."
+if [ ! -x "$OPENSSL_BIN" ]; then
+    echo "Erreur : binaire $OPENSSL_BIN introuvable."
     exit 1
 fi
 
-echo "=============================================="
-echo "        Circuit de test TLS/SSL client"
-echo "=============================================="
-echo ""
-echo "Choisir le programme de test :"
-echo "  1) openssl_custom_testssl"
-echo "  2) custom_client"
-read -p "Choix : " TOOL_CHOICE
+if [ ! -x "$CUSTOM_CLIENT" ]; then
+    echo "Erreur : binaire $CUSTOM_CLIENT introuvable."
+    exit 1
+fi
 
-case "$TOOL_CHOICE" in
-    1) TOOL="openssl" ;;
-    2) TOOL="custom" ;;
-    *) echo "Choix invalide"; exit 1 ;;
-esac
+echo "Sélectionne la version du protocole :"
+echo "  1) SSLv3"
+echo "  2) TLS1.0"
+echo "  3) TLS1.1"
+echo "  4) TLS1.2"
+echo "  5) TLS1.3"
+read -p "Choix : " PROTO_CHOICE
 
-echo ""
-echo "Choisir le circuit de test :"
-echo "  1) SSLv2"
-echo "  2) SSLv3"
-echo "  3) TLS1.0"
-echo "  4) TLS1.1"
-echo "  5) TLS1.2"
-echo "  6) TLS1.3"
-
-read -p "Choix : " CIRCUIT
-
-case "$CIRCUIT" in
+case "$PROTO_CHOICE" in
     1)
-        CMD="OPENSSL_CONF=/dev/null $OPENSSL_BIN s_client -ssl2 -connect ${TARGET_IP}:${TARGET_PORT} < /dev/null"
-        ;;
-    2)
         CMD="OPENSSL_CONF=/dev/null $OPENSSL_BIN s_client -ssl3 -connect ${TARGET_IP}:${TARGET_PORT} < /dev/null"
         ;;
-    3)
+    2)
         CMD="OPENSSL_CONF=/dev/null $OPENSSL_BIN s_client -tls1 -connect ${TARGET_IP}:${TARGET_PORT} < /dev/null"
         ;;
-    4)
+    3)
         CMD="OPENSSL_CONF=/dev/null $OPENSSL_BIN s_client -tls1_1 -connect ${TARGET_IP}:${TARGET_PORT} < /dev/null"
         ;;
-    5)
+    4)
         PROTOCOL="tls12"
 
         echo "Entrez la ciphersuite TLS1.2 à utiliser (ex: ECDHE-RSA-AES128-GCM-SHA256)"
@@ -62,7 +64,7 @@ case "$CIRCUIT" in
 
         CMD="$CUSTOM_CLIENT $TARGET_IP $TARGET_PORT $PROTOCOL $CIPHERSUITE $VERIFY"
         ;;
-    6)
+    5)
         PROTOCOL="tls13"
 
         echo "Entrez la ciphersuite TLS1.3 à utiliser (ex: TLS_AES_128_GCM_SHA256)"
@@ -75,7 +77,7 @@ case "$CIRCUIT" in
         CMD="$CUSTOM_CLIENT $TARGET_IP $TARGET_PORT $PROTOCOL $CIPHERSUITE $VERIFY"
         ;;
     *)
-        echo "Choix invalide"
+        echo "Choix invalide."
         exit 1
         ;;
 esac
@@ -87,7 +89,7 @@ echo "Tentatives : 3"
 echo "--------------------------------------------------"
 echo ""
 
-for ((i=1; i<=5; i++)); do
+for ((i=1; i<=4; i++)); do
     echo "================ Tentative $i ================"
     eval $CMD
 done
