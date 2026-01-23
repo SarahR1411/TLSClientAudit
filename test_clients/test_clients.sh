@@ -5,13 +5,14 @@
 # Usage: ./test_client.sh <addr_ip> <port>
 # ==========================================================
 
-if [ $# -ne 2 ]; then
-    echo "Usage: $0 <addr_ip> <port>"
+if [ $# -ne 3 ]; then
+    echo "Usage: $0 <addr_ip> <port> <try_number>"
     exit 1
 fi
 
 TARGET_IP="$1"
 TARGET_PORT="$2"
+TRY_NUMBER="$3"
 
 echo "=============================================="
 echo "              Client TLS/SSL"
@@ -85,11 +86,11 @@ esac
 echo ""
 echo "--------------------------------------------------"
 echo "Cible : ${TARGET_HOST}:${TARGET_PORT}"
-echo "Tentatives : 3"
+echo "Tentatives : ${TRY_NUMBER}"
 echo "--------------------------------------------------"
 echo ""
 
-for ((i=1; i<=4; i++)); do
+for ((i=1; i<=$TRY_NUMBER; i++)); do
     echo "================ Tentative $i ================"
     eval $CMD
 done
