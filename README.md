@@ -140,7 +140,9 @@ Pour tester le serveur mitmproxy, un script shell générant des clients a été
 Ce script utilise une version custom du binary de openssl tiré du repository testssl ainsi qu'un client C++ utilisant la dernière version de openssl.
 
 Le script se lance en précisant l'adresse ip et le port de la cible.
+```bash
     ./test_clients.sh <adresse_ip> <port>
+```
 Il doit être lancé sur une machine qui est écoutée par le serveur mitmproxy.
 
 Un choix de la version de TLS est ensuite présenté :
