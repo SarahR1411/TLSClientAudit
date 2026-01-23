@@ -1,4 +1,6 @@
-# Audit de Sécurité TLS Client
+# TLSClientAudit : Outil d'audit de la sécurité des clients TLS
+
+Ce projet est né du constat d’un manque, voire d’une absence totale, d’outils d’audit dédiés aux clients TLS, alors qu’il existe de nombreux outils pour auditer les serveurs TLS. Ce dépôt propose ainsi notre approche pour répondre à cette problématique.
 
 Cet outil utilise `mitmproxy` pour effectuer un audit de la sécurité des implémentations TLS côté client. Il commence par une analyse passive des capacités du client, suivie d'une série de tests actifs simulant des attaques courantes. L'audit se conclut par la génération d'un rapport au format PDF.
 
@@ -15,6 +17,14 @@ Conditions d'utilisation :
 ## Fonctionnement de l'outil
 
 L'outil fonctionne selon le principe d'une machine à états séquentielle. Chaque client, identifié de manière unique par le couple `(adresse IP, serveur cible)`, passe par une série de cinq tests consécutifs.
+
+![Résultat de l'audit TLS](https://github.com/user-attachments/assets/60b41a4f-8a1c-4d94-91b8-c135490194da)
+
+*Figure : Exemple de sortie de l’outil lors d’un test en environnement local (client : **curl**).*
+
+📄 [GLOBAL_CLIENT_AUDIT_REPORT.pdf](https://github.com/user-attachments/files/24822718/GLOBAL_CLIENT_AUDIT_REPORT.pdf)  
+Exemple de rapport PDF généré par l’outil.
+
 
 ### Pourquoi tester étape par étape ?
 
