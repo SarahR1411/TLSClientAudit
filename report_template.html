@@ -72,13 +72,18 @@
             {% endif %}
         </li>
         <li>Forward Secrecy (PFS): 
-            <span class="{{ 'good' if 'YES' == report.negotiated.pfs else 'bad' }}">
-                {{ report.negotiated.pfs }}
+            {% set pfs = report.negotiated.pfs | default("N/A") %}
+            <span class="{{ 'good' if pfs == 'YES' else 'bad' }}">
+                {{ pfs }}
             </span>
         </li>
+        
         <li>Authenticated Encryption (AEAD): 
-            <span class="{{ 'good' if 'YES' == report.negotiated.aead else 'warn' }}">
-                {{ report.negotiated.aead }}
+            {% set aead = report.negotiated.aead | default("N/A") %}
+            <span class="{{ 'good' if aead == 'YES' else 'warn' }}">
+                {{ aead }}
+            </span>
+        </li>
     </ul>
 
     <h3>2. Certificate Analysis</h3>
