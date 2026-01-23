@@ -573,6 +573,7 @@ class ClientAuditor:
         if "RC4" in cipher_name or "MD5" in cipher_name: score = "F"
         
         return score, {'pfs': pfs_status, 'aead': aead_status}
+    
     def generate_bad_cert(self):
         """
         Generates a self-signed certificate with incorrect elements
@@ -660,7 +661,10 @@ class ClientAuditor:
         for client_key, state in self.client_state.items():
             if 'report' in state and state['report']:
                 print(f"{YELLOW}[!] Including partial audit for {client_key}{RESET}")
-                state['report']['final_grade'] = "INCOMPLETE"
+                report = state['report']
+                report.setdefault('negotiated', {})
+                report.setdefault('base_score', "N/A")
+                report.setdefault('final_grade', "INCOMPLETE")
                 self.unique_reports[client_key] = state['report']
             
         if not self.unique_reports:
